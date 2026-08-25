@@ -1,0 +1,10 @@
+/target
+/dist
+*.zip
+*.zip.sha256
+/mpe_plugin_agent
+/mpe_plugin_agent.exe
+mpe_plugin_agent
+mpe_plugin_agent.exe
+.DS_Store
+*.swp

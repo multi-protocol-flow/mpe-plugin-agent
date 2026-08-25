@@ -1,0 +1,16 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "description": "Agent plugin: ReAct autonomous decision engine with tool dynamic calling, self-correction, guardrails, and thinking timeline",
+  "entry": {
+    "command": "./mpe_plugin_agent"
+  },
+  "env": {},
+  "permissions": [],
+  "capabilities": {
+    "streaming": true,
+    "bidirectional": true
+  },
+  "locales": ["zh-CN", "en-US"],
+  "default_locale": "en-US"
+}

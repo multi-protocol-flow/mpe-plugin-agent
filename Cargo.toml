@@ -1,0 +1,46 @@
+[package]
+name = "mpe-plugin-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Agent protocol plugin: ReAct autonomous decision loop with tool calling, self-correction, dynamic parameter merging, guardrails, and thinking timeline"
+
+[dependencies]
+mpe-plugin-sdk = { git = "https://github.com/multi-protocol-flow/mpe-plugin-sdk.git", tag = "v0.2.2" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+eventsource-stream = "0.2"
+futures-util = "0.3"
+jsonschema = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+thiserror = "1.0"
+log = "0.4"
+regex = "1.10"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+
+[profile.release]
+opt-level = 3
+
+[[bin]]
+name = "mpe_plugin_agent"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"

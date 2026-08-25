@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-${{ matrix.artifact_os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, artifact_os: linux-x64, bin: mpe_plugin_agent }
+          - { os: windows-latest, artifact_os: windows-x64, bin: mpe_plugin_agent.exe }
+          - { os: macos-latest, artifact_os: macos-x64, bin: mpe_plugin_agent }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Inject version from tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          python3 - "${{ steps.version.outputs.value }}" <<'EOF'
+          import re, sys
+          version = sys.argv[1]
+          cargo = open("Cargo.toml", encoding="utf-8").read()
+          cargo = re.sub(r'^version = "[^"]*"', f'version = "{version}"', cargo, count=1, flags=re.M)
+          open("Cargo.toml", "w", encoding="utf-8").write(cargo)
+          manifest = open("plugin.json", encoding="utf-8").read()
+          manifest = re.sub(r'"version": "[^"]*"', f'"version": "{version}"', manifest, count=1)
+          open("plugin.json", "w", encoding="utf-8").write(manifest)
+          EOF
+      - name: Build frontend (panel + viewer)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Build (release)
+        run: cargo build --release
+      - name: Offline tests (unit + mock e2e)
+        run: cargo test
+      - name: Package zip + sha256
+        shell: bash
+        run: |
+          VERSION=${{ steps.version.outputs.value }}
+          mkdir -p dist/agent
+          cp plugin.json dist/agent/
+          cp target/release/${{ matrix.bin }} dist/agent/
+          python3 - "$VERSION" "${{ matrix.artifact_os }}" "${{ matrix.bin }}" <<'EOF'
+          import hashlib, os, sys, zipfile
+          version, artifact_os, bin = sys.argv[1], sys.argv[2], sys.argv[3]
+          os.chmod(f"dist/agent/{bin}", 0o755)
+          name = f"agent-{version}-{artifact_os}.zip"
+          with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as z:
+              for f in ("plugin.json", bin):
+                  z.write(f"dist/agent/{f}", f"agent/{f}")
+          digest = hashlib.sha256(open(name, "rb").read()).hexdigest()
+          open(f"{name}.sha256", "w").write(f"{digest}  {name}\n")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.artifact_os }}
+          path: |
+            agent-*.zip
+            agent-*.zip.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+      - name: Trigger registry sync
+        if: env.GH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.MPE_REGISTRY_TOKEN }}
+        run: gh workflow run sync.yml --repo multi-protocol-flow/mpe-plugin-registry --ref main

@@ -1,0 +1,206 @@
+import type {
+  PluginIframeInitPayload,
+  PluginIframeNodeSnapshot,
+} from './types';
+import { setLocale } from './i18n';
+
+export interface BridgeOptions {
+  onInit?: (config: Record<string, unknown>, nodes?: PluginIframeNodeSnapshot[], initPayload?: PluginIframeInitPayload) => void;
+  onConfigUpdated?: (config: unknown) => void;
+  onExecutionUpdate?: (output: unknown) => void;
+}
+
+interface PendingAction {
+  resolve: (value: unknown) => void;
+  reject: (reason: Error) => void;
+  timer: number;
+}
+
+const ACTION_TIMEOUT_MS = 30000;
+let locale = 'en-US';
+let nodeType = 'agent:react';
+let nodes: PluginIframeNodeSnapshot[] | undefined = undefined;
+let initConfig: Record<string, unknown> = {};
+
+const pendingActions = new Map<string, PendingAction>();
+
+function post(type: string, payload: Record<string, unknown> = {}): void {
+  try {
+    if (typeof window !== 'undefined' && window.parent && window.parent !== window) {
+      window.parent.postMessage({ type, payload }, '*');
+    }
+  } catch (err) {
+    console.error('[agent] failed to post message', type, err);
+  }
+}
+
+export function postReady(): void {
+  post('ready', {});
+}
+
+export function postResize(height: number): void {
+  post('resize', { height });
+}
+
+export function postError(message: string): void {
+  post('error', { message });
+}
+
+function requestAction(action: string, params: unknown): Promise<unknown> {
+  return new Promise<unknown>((resolve, reject) => {
+    const requestId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+
+    const timer = window.setTimeout(() => {
+      pendingActions.delete(requestId);
+      reject(new Error(`Action '${action}' timed out after ${ACTION_TIMEOUT_MS}ms`));
+    }, ACTION_TIMEOUT_MS);
+
+    pendingActions.set(requestId, { resolve, reject, timer });
+    post('requestAction', { requestId, action, params });
+  });
+}
+
+export function uiCall(method: string, payload: unknown): Promise<unknown> {
+  return requestAction('uiCall', { nodeType, method, payload });
+}
+
+let configTimer: number | null = null;
+let lastReportedJson = '';
+
+export function notifyConfig(config: unknown): void {
+  if (configTimer !== null) {
+    window.clearTimeout(configTimer);
+  }
+  configTimer = window.setTimeout(() => {
+    configTimer = null;
+    const json = JSON.stringify(config);
+    if (json === lastReportedJson) return;
+    lastReportedJson = json;
+    post('configChanged', { config });
+  }, 100);
+}
+
+export function flushConfig(): void {
+  if (configTimer !== null) {
+    window.clearTimeout(configTimer);
+    configTimer = null;
+  }
+}
+
+export function initBridge(options: BridgeOptions): () => void {
+  const handleMessage = (event: MessageEvent) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object' || typeof data.type !== 'string') {
+      return;
+    }
+    const payload = (data.payload && typeof data.payload === 'object' ? data.payload : {}) as Record<string, unknown>;
+
+    switch (data.type) {
+      case 'init': {
+        const initPayload = payload as unknown as PluginIframeInitPayload;
+        if (typeof initPayload.locale === 'string') {
+          locale = initPayload.locale;
+          setLocale(initPayload.locale);
+        }
+        if (typeof initPayload.nodeType === 'string') {
+          nodeType = initPayload.nodeType;
+        }
+        if (Array.isArray(initPayload.nodes)) {
+          nodes = initPayload.nodes;
+        }
+        if (initPayload.config && typeof initPayload.config === 'object') {
+          initConfig = initPayload.config as Record<string, unknown>;
+          lastReportedJson = JSON.stringify(initPayload.config);
+        }
+        options.onInit?.(initConfig, nodes, initPayload);
+        postReady();
+        break;
+      }
+      case 'configUpdated': {
+        const nextJson = JSON.stringify(payload.config);
+        if (nextJson === lastReportedJson) {
+          break;
+        }
+        lastReportedJson = nextJson;
+        options.onConfigUpdated?.(payload.config);
+        break;
+      }
+      case 'actionResult': {
+        const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+        const pending = pendingActions.get(requestId);
+        if (!pending) return;
+        pendingActions.delete(requestId);
+        window.clearTimeout(pending.timer);
+        if (typeof payload.error === 'string' && payload.error.length > 0) {
+          pending.reject(new Error(payload.error));
+        } else {
+          pending.resolve(payload.result);
+        }
+        break;
+      }
+      case 'executionUpdate': {
+        options.onExecutionUpdate?.(payload.output || payload.result || payload);
+        break;
+      }
+    }
+  };
+
+  window.addEventListener('message', handleMessage);
+  post('requestInit', {});
+
+  let lastReportedHeight = -1;
+  const updateHeight = () => {
+    const root = document.getElementById('root');
+    if (root) {
+      const height = Math.ceil(Math.max(root.scrollHeight, root.offsetHeight));
+      if (Number.isFinite(height) && height > 0 && Math.abs(height - lastReportedHeight) >= 1) {
+        lastReportedHeight = height;
+        postResize(height);
+      }
+    }
+  };
+
+  window.addEventListener('resize', updateHeight);
+
+  let resizeObserver: ResizeObserver | null = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(updateHeight);
+    const root = document.getElementById('root');
+    if (root) {
+      resizeObserver.observe(root);
+    } else if (document.body) {
+      resizeObserver.observe(document.body);
+    }
+  }
+
+  setTimeout(updateHeight, 0);
+  setTimeout(updateHeight, 50);
+  setTimeout(updateHeight, 150);
+
+  return () => {
+    window.removeEventListener('message', handleMessage);
+    window.removeEventListener('resize', updateHeight);
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+    }
+  };
+}
+
+export function getLocale(): string {
+  return locale;
+}
+
+export function getNodeType(): string {
+  return nodeType;
+}
+
+export function getNodes(): PluginIframeNodeSnapshot[] | undefined {
+  return nodes;
+}
+
+export function getInitConfig(): Record<string, unknown> {
+  return initConfig;
+}
