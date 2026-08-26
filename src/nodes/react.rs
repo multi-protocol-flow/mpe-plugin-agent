@@ -6,10 +6,15 @@ use std::time::{Duration, Instant};
 use mpe_plugin_sdk::pool::ConnectionPool;
 use mpe_plugin_sdk::prelude::*;
 
-use crate::client::{build_client, call_chat_completion, LlmCallResult};
+use crate::client::{
+    build_client, call_chat_completion, call_chat_completion_with_stream_channel, LlmCallResult,
+    StreamChunkDelta,
+};
 use crate::types::{
-    audit_tool_call_safety, merge_tool_config, tool_to_openai_function, AgentReactConfig,
-    AgentReactOutput, AgentToolDefinition, ChatMessage, LlmProviderConfig, TimelineStep,
+    ask_human_tool_definition, audit_tool_call_safety, clear_execution_interactions,
+    drain_interruptions, merge_tool_config, next_interaction_id, register_interaction,
+    tool_to_openai_function, AgentReactConfig, AgentReactOutput, AgentToolDefinition,
+    ChatMessage, HumanResponse, LlmProviderConfig, PendingInteraction, TimelineStep,
     TimelineToolCall, TokenUsage,
 };
 
@@ -262,12 +267,20 @@ pub async fn execute_react(
         Ok(c) => c,
         Err(err) => return ExecuteResult::fail(err),
     };
-    let tools_json: Vec<serde_json::Value> = config
+    let mut tools_json: Vec<serde_json::Value> = config
         .tools
         .iter()
         .map(tool_to_openai_function)
         .collect();
 
+    // Inject built-in ask_human tool if enabled and not already present
+    if config.enable_ask_human
+        && !tools_json
+            .iter()
+            .any(|t| t.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) == Some("ask_human"))
+    {
+        tools_json.push(ask_human_tool_definition());
+    }
     let user_prompt = config.user_prompt.trim();
     if user_prompt.is_empty() {
         return ExecuteResult::fail(crate::i18n::t(
@@ -290,6 +303,8 @@ pub async fn execute_react(
     let mut previous_round_had_error = false;
     let mut final_answer = String::new();
     let mut converged = false;
+    let mut paused_total_duration = Duration::ZERO;
+    let mut step_by_step_active = config.step_by_step;
 
     let overall_start = Instant::now();
     let max_timeout = Duration::from_secs(config.timeout_secs.max(1));
@@ -297,24 +312,115 @@ pub async fn execute_react(
     ctx.log("info", format!("Starting ReAct agent execution (max_iterations: {})", config.max_iterations));
 
     for round in 1..=config.max_iterations {
-        if overall_start.elapsed() > max_timeout {
+        let elapsed_active = overall_start.elapsed().saturating_sub(paused_total_duration);
+        if elapsed_active > max_timeout {
             ctx.log("warn", format!("Agent execution timed out after {}s", config.timeout_secs));
             break;
         }
 
+        // 1. Process pending human interruptions / steering messages at step boundary
+        let pending_interruptions = drain_interruptions(&exec_id);
+        for interruption_text in pending_interruptions {
+            ctx.log("info", format!("Agent received human interruption: {interruption_text}"));
+            messages.push(ChatMessage::user(format!("[Human Interruption / Steering]: {interruption_text}")));
+            ctx.emit(
+                "stream",
+                serde_json::json!({
+                    "type": "interrupted",
+                    "text": &interruption_text,
+                    "step_index": round,
+                }),
+            )
+            .await;
+            timeline.push(TimelineStep {
+                step_index: round,
+                step_type: "interrupted".to_string(),
+                thought: Some(interruption_text.clone()),
+                tool_calls: Vec::new(),
+                duration_ms: 0,
+                self_correction: false,
+                tokens: None,
+                human_interaction: None,
+                human_response: Some(HumanResponse {
+                    text: Some(interruption_text),
+                    ..Default::default()
+                }),
+            });
+        }
+
         ctx.log("info", format!("Agent round {round}/{} thinking...", config.max_iterations));
 
-        let llm_res: LlmCallResult = match call_chat_completion(
-            &client,
-            &provider,
-            &messages,
-            &tools_json,
-            config.temperature,
-            config.stream,
-        )
-        .await
-        {
-            Ok(res) => res,
+        // 2. Real-time streaming LLM invocation with backpressure emit to host
+        let llm_res_result = {
+            let (stream_tx, mut stream_rx) =
+                tokio::sync::mpsc::unbounded_channel::<StreamChunkDelta>();
+
+            let call_fut = call_chat_completion_with_stream_channel(
+                &client,
+                &provider,
+                &messages,
+                &tools_json,
+                config.temperature,
+                config.stream,
+                Some(stream_tx),
+            );
+            tokio::pin!(call_fut);
+
+            let res = loop {
+                tokio::select! {
+                    call_res = &mut call_fut => break call_res,
+                    Some(delta) = stream_rx.recv() => {
+                        let is_reasoning = !delta.delta_reasoning.is_empty();
+                        let chunk_text = if is_reasoning {
+                            &delta.delta_reasoning
+                        } else {
+                            &delta.delta_content
+                        };
+                        ctx.emit(
+                            "stream",
+                            serde_json::json!({
+                                "kind": if is_reasoning { "reasoning" } else { "content" },
+                                "delta_reasoning": delta.delta_reasoning,
+                                "delta_content": delta.delta_content,
+                                "text": chunk_text,
+                                "fullContent": delta.full_content,
+                                "fullReasoning": delta.full_reasoning,
+                                "step_index": round,
+                            }),
+                        )
+                        .await;
+                    }
+                }
+            };
+
+            // Drain any remaining buffered chunk deltas
+            while let Ok(delta) = stream_rx.try_recv() {
+                let is_reasoning = !delta.delta_reasoning.is_empty();
+                let chunk_text = if is_reasoning {
+                    &delta.delta_reasoning
+                } else {
+                    &delta.delta_content
+                };
+                ctx.emit(
+                    "stream",
+                    serde_json::json!({
+                        "kind": if is_reasoning { "reasoning" } else { "content" },
+                        "delta_reasoning": delta.delta_reasoning,
+                        "delta_content": delta.delta_content,
+                        "text": chunk_text,
+                        "fullContent": delta.full_content,
+                        "fullReasoning": delta.full_reasoning,
+                        "step_index": round,
+                    }),
+                )
+                .await;
+            }
+
+            res
+        };
+
+        let llm_res: LlmCallResult = match llm_res_result {
+            Ok(call_res) => call_res,
             Err(err) => {
                 ctx.log("error", format!("LLM API call failed in round {round}: {err}"));
                 timeline.push(TimelineStep {
@@ -325,7 +431,10 @@ pub async fn execute_react(
                     duration_ms: 0,
                     self_correction: previous_round_had_error,
                     tokens: None,
+                    human_interaction: None,
+                    human_response: None,
                 });
+                clear_execution_interactions(&exec_id);
                 return ExecuteResult {
                     success: false,
                     next_ports: vec!["false".to_string()],
@@ -338,7 +447,7 @@ pub async fn execute_react(
                         tool_call_count: total_tool_calls_count,
                         self_corrections_count,
                         token_usage: total_token_usage,
-                        total_duration_ms: overall_start.elapsed().as_millis() as u64,
+                        total_duration_ms: overall_start.elapsed().saturating_sub(paused_total_duration).as_millis() as u64,
                         timeline,
                     }).unwrap_or_default()),
                 };
@@ -364,24 +473,35 @@ pub async fn execute_react(
                 duration_ms: llm_res.duration_ms,
                 self_correction: previous_round_had_error,
                 tokens: llm_res.token_usage,
+                human_interaction: None,
+                human_response: None,
             });
 
             ctx.log("info", format!("Agent converged in round {round} with final answer"));
+            ctx.emit(
+                "stream",
+                serde_json::json!({
+                    "type": "converged",
+                    "final_answer": &final_answer,
+                    "iterations": round,
+                    "step_index": round,
+                }),
+            )
+            .await;
             break;
         }
 
-        // Case B: Model decided to call one or more tools
         let is_self_correction_round = previous_round_had_error;
         let mut step_tool_calls = Vec::new();
         let mut current_round_has_error = false;
+        let mut round_human_interaction: Option<PendingInteraction> = None;
+        let mut round_human_response: Option<HumanResponse> = None;
 
         // Record assistant's tool_calls message into conversation history
         let content_cleaned = match &llm_res.content {
             Some(c) if !c.trim().is_empty() => Some(c.clone()),
             _ => None,
         };
-
-        // Record assistant's tool_calls message into conversation history
         messages.push(ChatMessage::assistant_tool_calls(
             content_cleaned,
             llm_res.reasoning_content.clone(),
@@ -397,7 +517,107 @@ pub async fn execute_react(
             total_tool_calls_count += 1;
             let func_name = &tc.function.name;
 
-            // Find matching tool definition
+            // Check if this is the built-in `ask_human` tool
+            if func_name == "ask_human" {
+                let question = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("question")
+                            .and_then(|q| q.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        if tc.function.arguments.trim().is_empty() {
+                            "Agent requests clarification from user.".to_string()
+                        } else {
+                            tc.function.arguments.clone()
+                        }
+                    });
+
+                let interaction_id = next_interaction_id("ask", &exec_id);
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                register_interaction(&interaction_id, tx);
+
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let pending = PendingInteraction {
+                    interaction_id: interaction_id.clone(),
+                    execution_id: exec_id.clone(),
+                    interaction_type: "ask_human".to_string(),
+                    prompt: question.clone(),
+                    tool_id: Some("ask_human".to_string()),
+                    tool_name: Some("ask_human".to_string()),
+                    input_args: Some(serde_json::json!({ "question": &question })),
+                    step_index: Some(round),
+                    created_at_ms: now_ms,
+                };
+
+                ctx.log("info", format!("Agent asking human: {question}"));
+                ctx.emit(
+                    "stream",
+                    serde_json::json!({
+                        "type": "waiting_human",
+                        "interaction": &pending,
+                        "step_index": round,
+                    }),
+                )
+                .await;
+
+                let pause_start = Instant::now();
+                let human_resp = match rx.await {
+                    Ok(resp) => resp,
+                    Err(_) => HumanResponse {
+                        text: Some("No response submitted".to_string()),
+                        ..Default::default()
+                    },
+                };
+                let pause_dur = pause_start.elapsed();
+                paused_total_duration += pause_dur;
+                let user_answer = human_resp
+                    .text
+                    .clone()
+                    .unwrap_or_else(|| "Confirmed".to_string());
+
+                ctx.log("info", format!("Human response received: {user_answer}"));
+                ctx.emit(
+                    "stream",
+                    serde_json::json!({
+                        "type": "human_resumed",
+                        "interaction_id": &interaction_id,
+                        "response": &human_resp,
+                        "step_index": round,
+                    }),
+                )
+                .await;
+
+                round_human_interaction = Some(pending.clone());
+                round_human_response = Some(human_resp.clone());
+
+                messages.push(ChatMessage::tool_result(&tc.id, &user_answer));
+
+                step_tool_calls.push(TimelineToolCall {
+                    call_id: tc.id.clone(),
+                    tool_id: "ask_human".to_string(),
+                    tool_name: "ask_human".to_string(),
+                    node_type: "human:interaction".to_string(),
+                    input_args: serde_json::json!({ "question": &question }),
+                    merged_config: serde_json::json!({ "question": &question }),
+                    success: true,
+                    output_data: Some(serde_json::json!({
+                        "question": &question,
+                        "user_response": &user_answer,
+                        "answer": &user_answer,
+                    })),
+                    error_message: None,
+                    raw_response: user_answer,
+                    duration_ms: pause_dur.as_millis() as u64,
+                });
+                continue;
+            }
+
+            // Find matching registered tool definition
             let tool_def = config.tools.iter().find(|t| {
                 t.name == *func_name
                     || t.id == *func_name
@@ -405,6 +625,7 @@ pub async fn execute_react(
                     || t.name.replace('_', " ") == *func_name
                     || t.name.to_lowercase() == func_name.to_lowercase()
             });
+
             match tool_def {
                 None => {
                     let err_msg = format!("Tool '{func_name}' is not registered");
@@ -413,7 +634,10 @@ pub async fn execute_react(
 
                     messages.push(ChatMessage::tool_result(
                         &tc.id,
-                        format!("Error: {err_msg}. Available tools: {:?}", config.tools.iter().map(|t| &t.name).collect::<Vec<_>>()),
+                        format!(
+                            "Error: {err_msg}. Available tools: {:?}",
+                            config.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+                        ),
                     ));
 
                     step_tool_calls.push(TimelineToolCall {
@@ -460,6 +684,94 @@ pub async fn execute_react(
                             });
                         }
                         Ok(dynamic_args) => {
+                            // Sensitive tool confirmation check
+                            if tool.require_confirmation {
+                                let interaction_id = next_interaction_id("confirm", &exec_id);
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                register_interaction(&interaction_id, tx);
+
+                                let now_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64;
+                                let pending = PendingInteraction {
+                                    interaction_id: interaction_id.clone(),
+                                    execution_id: exec_id.clone(),
+                                    interaction_type: "confirmation".to_string(),
+                                    prompt: format!(
+                                        "Tool '{}' requires human confirmation before execution",
+                                        tool.name
+                                    ),
+                                    tool_id: Some(tool.id.clone()),
+                                    tool_name: Some(tool.name.clone()),
+                                    input_args: Some(dynamic_args.clone()),
+                                    step_index: Some(round),
+                                    created_at_ms: now_ms,
+                                };
+
+                                ctx.log("info", format!("Waiting for human confirmation to execute tool '{}'", tool.name));
+                                ctx.emit(
+                                    "stream",
+                                    serde_json::json!({
+                                        "type": "waiting_human",
+                                        "interaction": &pending,
+                                        "step_index": round,
+                                    }),
+                                )
+                                .await;
+
+                                let pause_start = Instant::now();
+                                let human_resp = match rx.await {
+                                    Ok(resp) => resp,
+                                    Err(_) => HumanResponse {
+                                        approved: Some(false),
+                                        reason: Some("Approval channel closed".to_string()),
+                                        ..Default::default()
+                                    },
+                                };
+                                let pause_dur = pause_start.elapsed();
+                                paused_total_duration += pause_dur;
+
+                                ctx.emit(
+                                    "stream",
+                                    serde_json::json!({
+                                        "type": "human_resumed",
+                                        "interaction_id": &interaction_id,
+                                        "response": &human_resp,
+                                        "step_index": round,
+                                    }),
+                                )
+                                .await;
+
+                                if human_resp.approved != Some(true) {
+                                    let reject_reason = human_resp
+                                        .reason
+                                        .unwrap_or_else(|| "Human rejected tool execution".to_string());
+                                    current_round_has_error = true;
+                                    self_corrections_count += 1;
+
+                                    messages.push(ChatMessage::tool_result(
+                                        &tc.id,
+                                        format!("Error: Human rejected tool execution: {reject_reason}"),
+                                    ));
+
+                                    step_tool_calls.push(TimelineToolCall {
+                                        call_id: tc.id.clone(),
+                                        tool_id: tool.id.clone(),
+                                        tool_name: tool.name.clone(),
+                                        node_type: tool.target_node_type.clone(),
+                                        input_args: dynamic_args,
+                                        merged_config: serde_json::json!({}),
+                                        success: false,
+                                        output_data: None,
+                                        error_message: Some(reject_reason.clone()),
+                                        raw_response: format!("{{\"error\": \"{reject_reason}\"}}"),
+                                        duration_ms: pause_dur.as_millis() as u64,
+                                    });
+                                    continue;
+                                }
+                            }
+
                             // Merge parameters
                             match merge_tool_config(
                                 &tool.fixed_config,
@@ -519,9 +831,39 @@ pub async fn execute_react(
                                             duration_ms: 0,
                                         });
                                     } else {
+                                        // Emit tool_start event to host/UI
+                                        ctx.emit(
+                                            "stream",
+                                            serde_json::json!({
+                                                "type": "tool_start",
+                                                "step_index": round,
+                                                "tool_id": &tool.id,
+                                                "tool_name": &tool.name,
+                                                "input_args": &dynamic_args,
+                                            }),
+                                        )
+                                        .await;
+
                                         // Execute tool
                                         let (t_ok, t_out, t_err, t_raw, t_dur) =
                                             execute_tool_dispatch(tool, &merged_cfg, ctx, &provider, pool, &exec_id).await;
+
+                                        // Emit tool_end event to host/UI
+                                        ctx.emit(
+                                            "stream",
+                                            serde_json::json!({
+                                                "type": "tool_end",
+                                                "step_index": round,
+                                                "tool_id": &tool.id,
+                                                "tool_name": &tool.name,
+                                                "success": t_ok,
+                                                "output": &t_out,
+                                                "error": &t_err,
+                                                "duration_ms": t_dur,
+                                            }),
+                                        )
+                                        .await;
+
                                         if !t_ok {
                                             current_round_has_error = true;
                                             self_corrections_count += 1;
@@ -579,9 +921,11 @@ pub async fn execute_react(
 
         previous_round_had_error = current_round_has_error;
 
-        timeline.push(TimelineStep {
+        let current_step = TimelineStep {
             step_index: round,
-            step_type: if is_self_correction_round {
+            step_type: if round_human_interaction.is_some() {
+                "ask_human".to_string()
+            } else if is_self_correction_round {
                 "self_correction".to_string()
             } else {
                 "tool_call".to_string()
@@ -591,10 +935,80 @@ pub async fn execute_react(
             duration_ms: llm_res.duration_ms,
             self_correction: is_self_correction_round,
             tokens: llm_res.token_usage,
-        });
+            human_interaction: round_human_interaction,
+            human_response: round_human_response,
+        };
+
+        ctx.emit(
+            "stream",
+            serde_json::json!({
+                "type": "step_completed",
+                "step": &current_step,
+                "step_index": round,
+            }),
+        )
+        .await;
+
+        timeline.push(current_step);
+
+        // 3. Step-by-step debug mode pause check
+        if step_by_step_active {
+            let interaction_id = next_interaction_id("step", &exec_id);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            register_interaction(&interaction_id, tx);
+
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let pending = PendingInteraction {
+                interaction_id: interaction_id.clone(),
+                execution_id: exec_id.clone(),
+                interaction_type: "step_pause".to_string(),
+                prompt: format!("Step {round} completed. Paused for step-by-step debug."),
+                tool_id: None,
+                tool_name: None,
+                input_args: None,
+                step_index: Some(round),
+                created_at_ms: now_ms,
+            };
+
+            ctx.log("info", format!("Agent paused after step {round} for debug stepping"));
+            ctx.emit(
+                "stream",
+                serde_json::json!({
+                    "type": "waiting_human",
+                    "interaction": &pending,
+                    "step_index": round,
+                }),
+            )
+            .await;
+
+            let pause_start = Instant::now();
+            let human_resp = rx.await.unwrap_or_default();
+            let pause_dur = pause_start.elapsed();
+            paused_total_duration += pause_dur;
+
+            ctx.emit(
+                "stream",
+                serde_json::json!({
+                    "type": "human_resumed",
+                    "interaction_id": &interaction_id,
+                    "response": &human_resp,
+                    "step_index": round,
+                }),
+            )
+            .await;
+
+            if human_resp.action.as_deref() == Some("run_to_end") {
+                step_by_step_active = false;
+            }
+        }
     }
 
-    let total_duration_ms = overall_start.elapsed().as_millis() as u64;
+    clear_execution_interactions(&exec_id);
+    let total_duration_ms = overall_start.elapsed().saturating_sub(paused_total_duration).as_millis() as u64;
+
 
     let output = AgentReactOutput {
         success: converged,

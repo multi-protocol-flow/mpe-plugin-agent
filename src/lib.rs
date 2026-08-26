@@ -61,7 +61,9 @@ fn agent_react_node() -> NodeDescription {
         "temperature": 0.2,
         "timeout_secs": 120,
         "read_only_mode": false,
-        "stream": true
+        "stream": true,
+        "enable_ask_human": true,
+        "step_by_step": false
     });
     node.capabilities = PluginCapabilities {
         streaming: true,
@@ -81,7 +83,9 @@ fn agent_react_node() -> NodeDescription {
             "temperature": { "type": "number", "title": i18n::t("采样温度", "Temperature") },
             "timeout_secs": { "type": "integer", "title": i18n::t("超时(秒)", "Timeout (s)") },
             "read_only_mode": { "type": "boolean", "title": i18n::t("只读安全模式", "Read-Only Mode") },
-            "stream": { "type": "boolean", "title": i18n::t("流式推理", "Streaming") }
+            "stream": { "type": "boolean", "title": i18n::t("流式推理", "Streaming") },
+            "enable_ask_human": { "type": "boolean", "title": i18n::t("启用人机提问 (ask_human)", "Enable ask_human Tool") },
+            "step_by_step": { "type": "boolean", "title": i18n::t("单步调试模式", "Step-by-Step Debug Mode") }
         },
         "required": ["user_prompt"]
     }));

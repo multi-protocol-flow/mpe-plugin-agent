@@ -18,6 +18,14 @@ pub struct LlmCallResult {
     pub raw_response: String,
     pub duration_ms: u64,
 }
+/// Single delta chunk emitted during LLM SSE streaming.
+#[derive(Debug, Clone, Default)]
+pub struct StreamChunkDelta {
+    pub delta_reasoning: String,
+    pub delta_content: String,
+    pub full_reasoning: String,
+    pub full_content: String,
+}
 
 /// Builds a configured `reqwest::Client` with rustls.
 pub fn build_client(config: &LlmProviderConfig) -> Result<reqwest::Client, String> {
@@ -89,6 +97,61 @@ pub async fn call_chat_completion(
     temperature: f32,
     stream: bool,
 ) -> Result<LlmCallResult, String> {
+    call_chat_completion_with_chunk_handler::<fn(&str, &str, &str, &str)>(
+        client,
+        provider,
+        messages,
+        tools,
+        temperature,
+        stream,
+        None,
+    )
+    .await
+}
+/// Calls OpenAI chat completions API with an unbounded channel for real-time SSE chunk deltas.
+pub async fn call_chat_completion_with_stream_channel(
+    client: &reqwest::Client,
+    provider: &LlmProviderConfig,
+    messages: &[ChatMessage],
+    tools: &[serde_json::Value],
+    temperature: f32,
+    stream: bool,
+    stream_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamChunkDelta>>,
+) -> Result<LlmCallResult, String> {
+    call_chat_completion_with_chunk_handler(
+        client,
+        provider,
+        messages,
+        tools,
+        temperature,
+        stream,
+        stream_tx.map(|tx| {
+            move |delta_rc: &str, delta_c: &str, full_rc: &str, full_c: &str| {
+                let _ = tx.send(StreamChunkDelta {
+                    delta_reasoning: delta_rc.to_string(),
+                    delta_content: delta_c.to_string(),
+                    full_reasoning: full_rc.to_string(),
+                    full_content: full_c.to_string(),
+                });
+            }
+        }),
+    )
+    .await
+}
+
+/// Calls OpenAI chat completions API with optional real-time streaming chunk handler callback.
+pub async fn call_chat_completion_with_chunk_handler<F>(
+    client: &reqwest::Client,
+    provider: &LlmProviderConfig,
+    messages: &[ChatMessage],
+    tools: &[serde_json::Value],
+    temperature: f32,
+    stream: bool,
+    mut chunk_handler: Option<F>,
+) -> Result<LlmCallResult, String>
+where
+    F: FnMut(&str, &str, &str, &str) + Send,
+{
     let url = join_endpoint(&provider.base_url, "chat/completions");
 
     let mut body = serde_json::Map::new();
@@ -223,8 +286,13 @@ pub async fn call_chat_completion(
             if let Some(choices) = chunk_json.get("choices").and_then(|c| c.as_array()) {
                 if let Some(choice) = choices.first() {
                     if let Some(delta) = choice.get("delta") {
+                        let mut got_delta = false;
+                        let mut delta_c_str = "";
+                        let mut delta_rc_str = "";
                         if let Some(c) = delta.get("content").and_then(|c| c.as_str()) {
                             content_acc.push_str(c);
+                            delta_c_str = c;
+                            got_delta = true;
                         }
                         if let Some(rc) = delta
                             .get("reasoning_content")
@@ -232,6 +300,13 @@ pub async fn call_chat_completion(
                             .and_then(|c| c.as_str())
                         {
                             reasoning_acc.push_str(rc);
+                            delta_rc_str = rc;
+                            got_delta = true;
+                        }
+                        if got_delta {
+                            if let Some(handler) = &mut chunk_handler {
+                                handler(delta_rc_str, delta_c_str, &reasoning_acc, &content_acc);
+                            }
                         }
                         if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                             for tc in tcs {

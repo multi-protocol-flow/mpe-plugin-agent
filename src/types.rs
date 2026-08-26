@@ -84,6 +84,10 @@ pub struct AgentToolDefinition {
     /// Dynamic JSON Schema exposed to LLM.
     #[serde(default)]
     pub dynamic_schema: serde_json::Value,
+
+    /// Require human confirmation/approval before invoking this tool.
+    #[serde(default)]
+    pub require_confirmation: bool,
 }
 
 fn default_tool_type() -> String {
@@ -139,10 +143,17 @@ pub struct AgentReactConfig {
     /// Read-only safety guardrail mode (default: false).
     #[serde(default)]
     pub read_only_mode: bool,
-
     /// Whether to stream LLM responses (default: true).
     #[serde(default = "default_true")]
     pub stream: bool,
+
+    /// Whether to enable built-in `ask_human` tool (default: true).
+    #[serde(default = "default_true")]
+    pub enable_ask_human: bool,
+
+    /// Step-by-step debug mode: pause after each tool execution for human stepping (default: false).
+    #[serde(default)]
+    pub step_by_step: bool,
 }
 
 fn default_system_prompt() -> String {
@@ -185,6 +196,8 @@ impl Default for AgentReactConfig {
             timeout_secs: default_timeout_secs(),
             read_only_mode: false,
             stream: true,
+            enable_ask_human: true,
+            step_by_step: false,
         }
     }
 }
@@ -316,7 +329,7 @@ pub struct TimelineToolCall {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineStep {
     pub step_index: u32,
-    /// "thought" | "tool_call" | "self_correction" | "final_answer" | "error"
+    /// "thought" | "tool_call" | "self_correction" | "final_answer" | "error" | "waiting_human" | "human_response" | "interrupted" | "step_pause"
     pub step_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thought: Option<String>,
@@ -327,6 +340,10 @@ pub struct TimelineStep {
     pub self_correction: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_interaction: Option<PendingInteraction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_response: Option<HumanResponse>,
 }
 
 /// Output data and report data returned by `agent:react`.
@@ -340,6 +357,141 @@ pub struct AgentReactOutput {
     pub token_usage: TokenUsage,
     pub total_duration_ms: u64,
     pub timeline: Vec<TimelineStep>,
+}
+/// A pending interaction request waiting for human intervention.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingInteraction {
+    pub interaction_id: String,
+    pub execution_id: String,
+    /// "ask_human" | "confirmation" | "step_pause"
+    pub interaction_type: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_args: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_index: Option<u32>,
+    pub created_at_ms: u64,
+}
+
+/// Response payload submitted by human in the loop.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HumanResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>, // "next_step" | "run_to_end" | "cancel"
+}
+
+/// Generates the standard OpenAI function tool schema for `ask_human`.
+pub fn ask_human_tool_definition() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "ask_human",
+            "description": "向人类用户提问以获取缺失的参数、背景信息或确认 (Ask human user for missing information, clarification or confirmation)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "向用户提出的具体问题或说明 (Specific question or explanation to the human user)"
+                    }
+                },
+                "required": ["question"]
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Thread-safe Interaction Registry & Interruption Queues
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use tokio::sync::oneshot;
+
+pub type InteractionSender = oneshot::Sender<HumanResponse>;
+
+static INTERACTION_REGISTRY: OnceLock<Mutex<HashMap<String, InteractionSender>>> = OnceLock::new();
+static INTERRUPTION_QUEUES: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+static INTERACTION_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Generates a globally unique interaction ID.
+pub fn next_interaction_id(prefix: &str, exec_id: &str) -> String {
+    let count = INTERACTION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}_{exec_id}_{count}")
+}
+
+/// Registers an active interaction channel waiting for human input.
+pub fn register_interaction(interaction_id: &str, tx: InteractionSender) {
+    let registry = INTERACTION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = registry.lock() {
+        map.insert(interaction_id.to_string(), tx);
+    }
+}
+
+/// Completes an interaction by sending the human response payload into the channel.
+pub fn complete_interaction(interaction_id: &str, resp: HumanResponse) -> bool {
+    let registry = INTERACTION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = registry.lock() {
+        if let Some(tx) = map.remove(interaction_id) {
+            return tx.send(resp).is_ok();
+        }
+    }
+    false
+}
+
+/// Pushes an interruption/steering text message into the session queue.
+pub fn push_interruption(execution_id: &str, text: String) {
+    let queues = INTERRUPTION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = queues.lock() {
+        let key = if execution_id.trim().is_empty() { "default" } else { execution_id.trim() };
+        map.entry(key.to_string()).or_default().push(text);
+    }
+}
+
+/// Drains and clears all pending interruptions for a session.
+pub fn drain_interruptions(execution_id: &str) -> Vec<String> {
+    let queues = INTERRUPTION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = queues.lock() {
+        let mut list = Vec::new();
+        // 1. Drain exact execution_id
+        if let Some(queue) = map.get_mut(execution_id) {
+            list.append(queue);
+        }
+        // 2. Also drain global/default queue if not already "default"
+        if execution_id != "default" && !execution_id.is_empty() {
+            if let Some(queue) = map.get_mut("default") {
+                list.append(queue);
+            }
+        }
+        // 3. Fallback: if list is still empty, drain any other queues
+        if list.is_empty() {
+            for queue in map.values_mut() {
+                list.append(queue);
+            }
+        }
+        return list;
+    }
+    Vec::new()
+}
+/// Cleans up any leftover interactions or interruptions for an execution session.
+pub fn clear_execution_interactions(execution_id: &str) {
+    if let Ok(mut map) = INTERACTION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        map.retain(|k, _| !k.contains(execution_id));
+    }
+    if let Ok(mut map) = INTERRUPTION_QUEUES.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        map.remove(execution_id);
+    }
 }
 
 /// Converts an `AgentToolDefinition` into OpenAI Function Calling format.

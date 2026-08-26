@@ -15,6 +15,8 @@ pub async fn handle_ui_call(
         "test_connection" => test_connection(params).await,
         "list_models" => list_models(params).await,
         "test_tool_safety" => test_tool_safety(params).await,
+        "submit_human_response" => submit_human_response(params).await,
+        "interrupt_agent" => interrupt_agent(params).await,
         other => Err(format!("Unknown UI call method: {other}")),
     }
 }
@@ -124,4 +126,58 @@ async fn test_tool_safety(params: serde_json::Value) -> Result<serde_json::Value
         Ok(_) => Ok(json!({ "allowed": true })),
         Err(err) => Ok(json!({ "allowed": false, "reason": err })),
     }
+}
+async fn submit_human_response(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let interaction_id = params
+        .get("interaction_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter 'interaction_id'".to_string())?;
+
+    let resp: crate::types::HumanResponse = if let Some(resp_val) = params.get("response") {
+        if let Some(text_str) = resp_val.as_str() {
+            crate::types::HumanResponse {
+                text: Some(text_str.to_string()),
+                ..Default::default()
+            }
+        } else {
+            serde_json::from_value(resp_val.clone())
+                .map_err(|e| format!("Invalid human response payload: {e}"))?
+        }
+    } else if let Some(text_str) = params.get("text").or_else(|| params.get("answer")).and_then(|v| v.as_str()) {
+        crate::types::HumanResponse {
+            text: Some(text_str.to_string()),
+            ..Default::default()
+        }
+    } else {
+        serde_json::from_value(params.clone())
+            .map_err(|e| format!("Invalid human response payload: {e}"))?
+    };
+
+    let completed = crate::types::complete_interaction(interaction_id, resp);
+    Ok(json!({
+        "success": completed,
+        "interaction_id": interaction_id,
+        "message": if completed { "Response accepted by agent session" } else { "Interaction channel not found or expired" }
+    }))
+}
+
+async fn interrupt_agent(params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let execution_id = params
+        .get("execution_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+
+    let text = params
+        .get("text")
+        .or_else(|| params.get("message"))
+        .or_else(|| params.get("content"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing interruption text / message".to_string())?;
+
+    crate::types::push_interruption(execution_id, text.to_string());
+    Ok(json!({
+        "success": true,
+        "execution_id": execution_id,
+        "message": "Interruption instruction queued for next agent step boundary"
+    }))
 }
