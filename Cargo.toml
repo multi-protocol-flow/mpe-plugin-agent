@@ -1,6 +1,6 @@
 [package]
 name = "mpe-plugin-agent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Agent protocol plugin: ReAct autonomous decision loop with tool calling, self-correction, dynamic parameter merging, guardrails, and thinking timeline"
 
