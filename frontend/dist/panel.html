@@ -7875,7 +7875,7 @@ const DEFAULT_CONFIG = {
   stream: true
 };
 function PanelApp() {
-  var _a, _b, _c, _d;
+  var _a, _b, _c, _d, _e, _f;
   const [config, setConfig] = reactExports.useState(DEFAULT_CONFIG);
   const [availableNodes, setAvailableNodes] = reactExports.useState([]);
   const [selectedPreset, setSelectedPreset] = reactExports.useState("openai");
@@ -7942,16 +7942,17 @@ function PanelApp() {
   const effectiveProvider = reactExports.useMemo(() => {
     if (config.provider_uuid && selectedProviderNode) {
       const pConf = selectedProviderNode.config || {};
+      const timeoutVal = typeof config.override_timeout_ms === "number" && config.override_timeout_ms > 0 ? config.override_timeout_ms : typeof pConf.timeout_ms === "number" ? pConf.timeout_ms : 6e4;
       return {
         base_url: String(pConf.base_url || "https://api.openai.com/v1"),
         api_key: pConf.api_key ? String(pConf.api_key) : "",
         model: String(config.override_model || pConf.model || "gpt-4o"),
-        timeout_ms: typeof pConf.timeout_ms === "number" ? pConf.timeout_ms : 6e4,
+        timeout_ms: timeoutVal,
         custom_headers: pConf.custom_headers || void 0
       };
     }
     return config.provider;
-  }, [config.provider_uuid, selectedProviderNode, config.provider, config.override_model]);
+  }, [config.provider_uuid, selectedProviderNode, config.provider, config.override_model, config.override_timeout_ms]);
   const updateProvider = (field, value) => {
     setConfig((prev) => ({
       ...prev,
@@ -8184,6 +8185,14 @@ function PanelApp() {
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "mono", children: String(((_b = selectedProviderNode.config) == null ? void 0 : _b.model) || "gpt-4o") })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: t("继承超时时间 (ms):", "Inherited Timeout (ms):") }),
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "mono", children: [
+                  String(((_c = selectedProviderNode.config) == null ? void 0 : _c.timeout_ms) || 6e4),
+                  " ms"
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: t("API 密钥:", "API Key:") }),
                 " ",
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "mono", children: effectiveProvider.api_key && effectiveProvider.api_key.trim() ? `${effectiveProvider.api_key.slice(0, 4)}••••${effectiveProvider.api_key.slice(-4)}` : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--danger)" }, children: t("未配置 (Missing)", "Not configured (Missing)") }) })
@@ -8216,7 +8225,7 @@ function PanelApp() {
                     /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: "", children: [
                       t("-- 使用服务商默认模型 --", "-- Use Provider Default Model --"),
                       " (",
-                      String(((_c = selectedProviderNode.config) == null ? void 0 : _c.model) || "gpt-4o"),
+                      String(((_d = selectedProviderNode.config) == null ? void 0 : _d.model) || "gpt-4o"),
                       ")"
                     ] }),
                     modelsList.map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m2, children: m2 }, m2))
@@ -8228,7 +8237,25 @@ function PanelApp() {
                   type: "text",
                   value: config.override_model || "",
                   onChange: (e) => setConfig((prev) => ({ ...prev, override_model: e.target.value })),
-                  placeholder: String(((_d = selectedProviderNode.config) == null ? void 0 : _d.model) || "gpt-4o")
+                  placeholder: String(((_e = selectedProviderNode.config) == null ? void 0 : _e.model) || "gpt-4o")
+                }
+              )
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", style: { marginTop: "2px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "row", style: { gap: "4px", fontSize: "12px", margin: 0 }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconClock, { size: 12 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("覆盖超时时间 (可选，留空则继承服务商超时)", "Override Timeout ms (Optional)") })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "number",
+                  value: typeof config.override_timeout_ms === "number" ? config.override_timeout_ms : "",
+                  onChange: (e) => {
+                    const val = e.target.value === "" ? void 0 : parseInt(e.target.value, 10);
+                    setConfig((prev) => ({ ...prev, override_timeout_ms: val }));
+                  },
+                  placeholder: ((_f = selectedProviderNode.config) == null ? void 0 : _f.timeout_ms) ? t(`如: ${selectedProviderNode.config.timeout_ms}`, `e.g. ${selectedProviderNode.config.timeout_ms}`) : "60000"
                 }
               )
             ] }),
@@ -8386,8 +8413,12 @@ function PanelApp() {
               "input",
               {
                 type: "number",
-                value: config.provider.timeout_ms || 6e4,
-                onChange: (e) => updateProvider("timeout_ms", parseInt(e.target.value, 10) || 6e4)
+                value: typeof config.provider.timeout_ms === "number" ? config.provider.timeout_ms : "",
+                placeholder: "60000",
+                onChange: (e) => {
+                  const val = e.target.value === "" ? 6e4 : parseInt(e.target.value, 10) || 6e4;
+                  updateProvider("timeout_ms", val);
+                }
               }
             )
           ] }),

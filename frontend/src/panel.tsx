@@ -439,16 +439,20 @@ function PanelApp() {
   const effectiveProvider = useMemo<LlmProviderConfig>(() => {
     if (config.provider_uuid && selectedProviderNode) {
       const pConf = (selectedProviderNode.config || {}) as Record<string, unknown>;
+      const timeoutVal =
+        typeof config.override_timeout_ms === 'number' && config.override_timeout_ms > 0
+          ? config.override_timeout_ms
+          : (typeof pConf.timeout_ms === 'number' ? pConf.timeout_ms : 60000);
       return {
         base_url: String(pConf.base_url || 'https://api.openai.com/v1'),
         api_key: pConf.api_key ? String(pConf.api_key) : '',
         model: String(config.override_model || pConf.model || 'gpt-4o'),
-        timeout_ms: typeof pConf.timeout_ms === 'number' ? pConf.timeout_ms : 60000,
+        timeout_ms: timeoutVal,
         custom_headers: (pConf.custom_headers as Record<string, string>) || undefined,
       };
     }
     return config.provider;
-  }, [config.provider_uuid, selectedProviderNode, config.provider, config.override_model]);
+  }, [config.provider_uuid, selectedProviderNode, config.provider, config.override_model, config.override_timeout_ms]);
 
   const updateProvider = (field: keyof LlmProviderConfig, value: unknown) => {
     setConfig((prev) => ({
@@ -701,6 +705,12 @@ function PanelApp() {
                   <span className="mono">{String(selectedProviderNode.config?.model || 'gpt-4o')}</span>
                 </div>
                 <div>
+                  <strong>{t('继承超时时间 (ms):', 'Inherited Timeout (ms):')}</strong>{' '}
+                  <span className="mono">
+                    {String(selectedProviderNode.config?.timeout_ms || 60000)} ms
+                  </span>
+                </div>
+                <div>
                   <strong>{t('API 密钥:', 'API Key:')}</strong>{' '}
                   <span className="mono">
                     {effectiveProvider.api_key && effectiveProvider.api_key.trim()
@@ -748,6 +758,25 @@ function PanelApp() {
                     placeholder={String(selectedProviderNode.config?.model || 'gpt-4o')}
                   />
                 )}
+              </div>
+              <div className="col" style={{ marginTop: '2px' }}>
+                <label className="row" style={{ gap: '4px', fontSize: '12px', margin: 0 }}>
+                  <IconClock size={12} />
+                  <span>{t('覆盖超时时间 (可选，留空则继承服务商超时)', 'Override Timeout ms (Optional)')}</span>
+                </label>
+                <input
+                  type="number"
+                  value={typeof config.override_timeout_ms === 'number' ? config.override_timeout_ms : ''}
+                  onChange={(e) => {
+                    const val = e.target.value === '' ? undefined : parseInt(e.target.value, 10);
+                    setConfig((prev) => ({ ...prev, override_timeout_ms: val }));
+                  }}
+                  placeholder={
+                    selectedProviderNode.config?.timeout_ms
+                      ? t(`如: ${selectedProviderNode.config.timeout_ms}`, `e.g. ${selectedProviderNode.config.timeout_ms}`)
+                      : '60000'
+                  }
+                />
               </div>
               <div className="row" style={{ gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
                 <button
@@ -894,10 +923,12 @@ function PanelApp() {
               </label>
               <input
                 type="number"
-                value={config.provider.timeout_ms || 60000}
-                onChange={(e) =>
-                  updateProvider('timeout_ms', parseInt(e.target.value, 10) || 60000)
-                }
+                value={typeof config.provider.timeout_ms === 'number' ? config.provider.timeout_ms : ''}
+                placeholder="60000"
+                onChange={(e) => {
+                  const val = e.target.value === '' ? 60000 : parseInt(e.target.value, 10) || 60000;
+                  updateProvider('timeout_ms', val);
+                }}
               />
             </div>
 

@@ -72,6 +72,7 @@ fn agent_react_node() -> NodeDescription {
         "properties": {
             "provider_uuid": { "type": "string", "title": i18n::t("服务商节点", "Provider Node") },
             "override_model": { "type": "string", "title": i18n::t("覆盖模型", "Override Model") },
+            "override_timeout_ms": { "type": "integer", "title": i18n::t("覆盖超时(毫秒)", "Override Timeout (ms)") },
             "provider": { "type": "object", "title": i18n::t("服务商配置", "Provider Config") },
             "system_prompt": { "type": "string", "title": i18n::t("系统提示词", "System Prompt") },
             "user_prompt": { "type": "string", "title": i18n::t("目标提示词", "User Prompt") },

@@ -101,6 +101,10 @@ pub struct AgentReactConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_model: Option<String>,
 
+    /// Optional provider request timeout override in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_timeout_ms: Option<u64>,
+
     /// Embedded provider config.
     #[serde(default)]
     pub provider: LlmProviderConfig,
@@ -170,6 +174,7 @@ impl Default for AgentReactConfig {
         Self {
             provider_uuid: None,
             override_model: None,
+            override_timeout_ms: None,
             provider: LlmProviderConfig::default(),
             system_prompt: default_system_prompt(),
             user_prompt: String::new(),
@@ -496,6 +501,7 @@ pub fn resolve_effective_provider(
     provider_uuid: Option<&str>,
     inline_provider: &LlmProviderConfig,
     override_model: Option<&str>,
+    override_timeout_ms: Option<u64>,
 ) -> Result<LlmProviderConfig, String> {
     let mut provider = if let Some(uuid) = provider_uuid.filter(|s| !s.trim().is_empty()) {
         let key = format!("{exec_id}:{uuid}");
@@ -532,6 +538,10 @@ pub fn resolve_effective_provider(
 
     if let Some(m) = override_model.filter(|s| !s.trim().is_empty()) {
         provider.model = m.to_string();
+    }
+
+    if let Some(t) = override_timeout_ms.filter(|&t| t > 0) {
+        provider.timeout_ms = t;
     }
 
     if provider.base_url.trim().is_empty() {
@@ -641,6 +651,7 @@ mod tests {
             Some("prov-node-1"),
             &inline_provider,
             None,
+            None,
         )
         .expect("should resolve from pool");
 
@@ -670,6 +681,7 @@ mod tests {
             Some("prov-node-ctx"),
             &inline_provider,
             None,
+            None,
         )
         .expect("should resolve from context providers map");
 
@@ -696,9 +708,11 @@ mod tests {
             None,
             &inline_provider,
             Some("deepseek-reasoner"),
+            Some(45000),
         )
         .expect("should resolve with override");
 
         assert_eq!(resolved.model, "deepseek-reasoner");
+        assert_eq!(resolved.timeout_ms, 45000);
     }
 }

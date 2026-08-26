@@ -43,6 +43,7 @@ export interface AgentToolDefinition {
 export interface AgentReactConfig {
   provider_uuid?: string;
   override_model?: string;
+  override_timeout_ms?: number;
   provider: LlmProviderConfig;
   system_prompt: string;
   user_prompt: string;

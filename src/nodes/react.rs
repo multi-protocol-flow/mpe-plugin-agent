@@ -32,6 +32,7 @@ pub async fn execute_tool_dispatch(
         "llm:chat" | "llm:structured" => {
             let mut tool_provider = fallback_provider.clone();
             if let Some(prov_uuid) = merged_config.get("provider_uuid").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                let override_timeout = merged_config.get("override_timeout_ms").and_then(|v| v.as_u64());
                 if let Ok(p) = crate::types::resolve_effective_provider(
                     pool,
                     Some(ctx.providers()),
@@ -39,6 +40,7 @@ pub async fn execute_tool_dispatch(
                     Some(prov_uuid),
                     fallback_provider,
                     merged_config.get("override_model").and_then(|v| v.as_str()),
+                    override_timeout,
                 ) {
                     tool_provider = p;
                 }
@@ -246,6 +248,7 @@ pub async fn execute_react(
         config.provider_uuid.as_deref(),
         &config.provider,
         config.override_model.as_deref(),
+        config.override_timeout_ms,
     ) {
         Ok(p) => p,
         Err(err) => return ExecuteResult::fail(err),
