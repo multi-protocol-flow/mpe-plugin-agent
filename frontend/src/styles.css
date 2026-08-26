@@ -320,3 +320,56 @@ textarea {
   word-break: break-all;
   max-width: 100%;
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.98); }
+}
+
+.animate-pulse {
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.hitl-card {
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.hitl-card-ask {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+}
+
+.hitl-card-confirm {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-left: 4px solid var(--warn);
+}
+
+.hitl-card-pause {
+  background: var(--info-soft);
+  border: 1px solid var(--info);
+  border-left: 4px solid var(--info);
+}
+
+.hitl-card-interrupted {
+  background: var(--ok-soft);
+  border: 1px solid var(--ok);
+  border-left: 4px solid var(--ok);
+}
+
+.interruption-bar {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+}

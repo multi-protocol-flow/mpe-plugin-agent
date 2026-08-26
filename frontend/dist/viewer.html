@@ -329,6 +329,59 @@ textarea {
   word-break: break-all;
   max-width: 100%;
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.98); }
+}
+
+.animate-pulse {
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.hitl-card {
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.hitl-card-ask {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+}
+
+.hitl-card-confirm {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-left: 4px solid var(--warn);
+}
+
+.hitl-card-pause {
+  background: var(--info-soft);
+  border: 1px solid var(--info);
+  border-left: 4px solid var(--info);
+}
+
+.hitl-card-interrupted {
+  background: var(--ok-soft);
+  border: 1px solid var(--ok);
+  border-left: 4px solid var(--ok);
+}
+
+.interruption-bar {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+}
 
 </style>
 </head>
@@ -7346,6 +7399,8 @@ function isZh() {
 function t(zh2, en) {
   return isZh() ? zh2 : en;
 }
+const ACTION_TIMEOUT_MS = 3e4;
+let nodeType = "agent:react";
 let nodes = void 0;
 let initConfig = {};
 const pendingActions = /* @__PURE__ */ new Map();
@@ -7364,10 +7419,30 @@ function postReady() {
 function postResize(height) {
   post("resize", { height });
 }
+function requestAction(action, params) {
+  return new Promise((resolve, reject) => {
+    const requestId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    const timer = window.setTimeout(() => {
+      pendingActions.delete(requestId);
+      reject(new Error(`Action '${action}' timed out after ${ACTION_TIMEOUT_MS}ms`));
+    }, ACTION_TIMEOUT_MS);
+    pendingActions.set(requestId, { resolve, reject, timer });
+    post("requestAction", { requestId, action, params });
+  });
+}
+function uiCall(method, payload) {
+  return requestAction("uiCall", { nodeType, method, payload });
+}
+function submitHumanResponse(interactionId, response) {
+  return uiCall("submit_human_response", { interaction_id: interactionId, response });
+}
+function interruptAgent(executionId, text) {
+  return uiCall("interrupt_agent", { execution_id: executionId, text });
+}
 let lastReportedJson = "";
 function initBridge(options) {
   const handleMessage = (event) => {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const data = event.data;
     if (!data || typeof data !== "object" || typeof data.type !== "string") {
       return;
@@ -7381,7 +7456,7 @@ function initBridge(options) {
           setLocale(initPayload.locale);
         }
         if (typeof initPayload.nodeType === "string") {
-          initPayload.nodeType;
+          nodeType = initPayload.nodeType;
         }
         if (Array.isArray(initPayload.nodes)) {
           nodes = initPayload.nodes;
@@ -7418,6 +7493,10 @@ function initBridge(options) {
       }
       case "executionUpdate": {
         (_c = options.onExecutionUpdate) == null ? void 0 : _c.call(options, payload.output || payload.result || payload);
+        break;
+      }
+      case "stream": {
+        (_d = options.onStreamMessage) == null ? void 0 : _d.call(options, payload);
         break;
       }
     }
@@ -7477,6 +7556,16 @@ function icon(children) {
     );
   };
 }
+const IconBot = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 8V4H8" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("rect", { width: "16", height: "12", x: "4", y: "8", rx: "2" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M2 14h2" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M20 14h2" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M15 13v2" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M9 13v2" })
+  ] })
+);
 const IconSparkles = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" }),
@@ -7485,6 +7574,9 @@ const IconSparkles = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 5h4" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M17 19h4" })
   ] })
+);
+const IconZap = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("polygon", { points: "13 2 3 14 12 14 11 22 21 10 12 10 13 2" }) })
 );
 const IconLayers = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -7502,11 +7594,10 @@ const IconCheckCircle = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "22 4 12 14.01 9 11.01" })
   ] })
 );
-const IconXCircle = icon(
+const IconX = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "12", r: "10" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "15", y1: "9", x2: "9", y2: "15" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "9", y1: "9", x2: "15", y2: "15" })
+    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "18", y1: "6", x2: "6", y2: "18" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "6", y1: "6", x2: "18", y2: "18" })
   ] })
 );
 const IconBrain = icon(
@@ -7528,11 +7619,17 @@ const IconCopy = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" })
   ] })
 );
+const IconActivity = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "22 12 18 12 15 21 9 3 6 12 2 12" }) })
+);
 const IconClock = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "12", r: "10" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "12 6 12 12 14 14" })
   ] })
+);
+const IconShield = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" }) })
 );
 const IconWrench = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" }) })
@@ -7543,9 +7640,53 @@ const IconRotateCcw = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 3v5h5" })
   ] })
 );
+const IconCode = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "16 18 22 12 16 6" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "8 6 2 12 8 18" })
+  ] })
+);
+const IconSend = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "22", y1: "2", x2: "11", y2: "13" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("polygon", { points: "22 2 15 22 11 13 2 9 22 2" })
+  ] })
+);
+const IconPause = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("rect", { x: "6", y: "4", width: "4", height: "16" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("rect", { x: "14", y: "4", width: "4", height: "16" })
+  ] })
+);
+const IconPlay = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("polygon", { points: "5 3 19 12 5 21 5 3" }) })
+);
+const IconHelpCircle = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "12", r: "10" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "12", y1: "17", x2: "12.01", y2: "17" })
+  ] })
+);
+const IconUser = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "7", r: "4" })
+  ] })
+);
 function ViewerApp() {
   var _a;
   const [output, setOutput] = reactExports.useState(null);
+  const [executionId, setExecutionId] = reactExports.useState("default");
+  const [activeInteraction, setActiveInteraction] = reactExports.useState(null);
+  const [liveReasoning, setLiveReasoning] = reactExports.useState("");
+  const [liveContent, setLiveContent] = reactExports.useState("");
+  const [executingTool, setExecutingTool] = reactExports.useState(null);
+  const [humanInputText, setHumanInputText] = reactExports.useState("");
+  const [rejectReasonText, setRejectReasonText] = reactExports.useState("");
+  const [interruptionText, setInterruptionText] = reactExports.useState("");
+  const [submittingInteraction, setSubmittingInteraction] = reactExports.useState(false);
+  const [interruptionNotice, setInterruptionNotice] = reactExports.useState(null);
   const [copiedAnswer, setCopiedAnswer] = reactExports.useState(false);
   const [copiedRaw, setCopiedRaw] = reactExports.useState(false);
   const [showRawJson, setShowRawJson] = reactExports.useState(false);
@@ -7554,6 +7695,8 @@ function ViewerApp() {
       onInit: (config, _nodes, initPayload) => {
         const payload = initPayload || config;
         const nodeReport = (payload == null ? void 0 : payload.node_report) || {};
+        const execId = String((nodeReport == null ? void 0 : nodeReport.execution_id) || "default");
+        setExecutionId(execId);
         const candidate = (payload == null ? void 0 : payload.reportData) || (payload == null ? void 0 : payload.outputData) || (nodeReport == null ? void 0 : nodeReport.plugin_data) || (nodeReport == null ? void 0 : nodeReport.output_data) || config;
         if (candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) {
           setOutput(candidate);
@@ -7562,6 +7705,135 @@ function ViewerApp() {
       onExecutionUpdate: (data) => {
         if (data && typeof data === "object") {
           setOutput(data);
+          setLiveReasoning("");
+          setLiveContent("");
+          setExecutingTool(null);
+        }
+      },
+      onStreamMessage: (msg) => {
+        if (msg.kind === "reasoning" || typeof msg.delta_reasoning === "string") {
+          if (msg.fullReasoning) {
+            setLiveReasoning(msg.fullReasoning);
+          } else if (msg.delta_reasoning) {
+            setLiveReasoning((prev) => prev + msg.delta_reasoning);
+          }
+        }
+        if (msg.kind === "content" || typeof msg.delta_content === "string") {
+          if (msg.fullContent) {
+            setLiveContent(msg.fullContent);
+          } else if (msg.delta_content) {
+            setLiveContent((prev) => prev + msg.delta_content);
+          }
+        }
+        if (msg.type === "tool_start") {
+          setExecutingTool({
+            tool_id: msg.tool_id || "",
+            tool_name: msg.tool_name || msg.tool_id || "tool",
+            input_args: msg.input_args
+          });
+        } else if (msg.type === "tool_end") {
+          setExecutingTool(null);
+        }
+        if (msg.type === "waiting_human" && msg.interaction) {
+          setActiveInteraction(msg.interaction);
+          if (msg.interaction.execution_id) {
+            setExecutionId(msg.interaction.execution_id);
+          }
+          setHumanInputText("");
+          setRejectReasonText("");
+        } else if (msg.type === "human_resumed") {
+          setActiveInteraction(null);
+        }
+        if (msg.type === "interrupted" && typeof msg.text === "string") {
+          const interruptedText = msg.text;
+          setOutput((prev) => {
+            const current = prev || {
+              success: false,
+              final_answer: "",
+              iterations: 1,
+              tool_call_count: 0,
+              self_corrections_count: 0,
+              token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              total_duration_ms: 0,
+              timeline: []
+            };
+            if (current.timeline.some((s) => s.step_type === "interrupted" && s.thought === interruptedText)) {
+              return current;
+            }
+            const stepIdx = current.timeline.length + 1;
+            const stepEntry = {
+              step_index: stepIdx,
+              step_type: "interrupted",
+              thought: interruptedText,
+              tool_calls: [],
+              duration_ms: 0,
+              self_correction: false,
+              human_response: { text: interruptedText }
+            };
+            return {
+              ...current,
+              iterations: current.timeline.length + 1,
+              timeline: [...current.timeline, stepEntry]
+            };
+          });
+        }
+        if (msg.type === "step_completed" && msg.step) {
+          setLiveReasoning("");
+          setLiveContent("");
+          setExecutingTool(null);
+          setOutput((prev) => {
+            const current = prev || {
+              success: false,
+              final_answer: "",
+              iterations: 1,
+              tool_call_count: 0,
+              self_corrections_count: 0,
+              token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              total_duration_ms: 0,
+              timeline: []
+            };
+            const existingIdx = current.timeline.findIndex(
+              (s) => {
+                var _a2;
+                return s.step_index === ((_a2 = msg.step) == null ? void 0 : _a2.step_index);
+              }
+            );
+            let nextTimeline;
+            if (existingIdx >= 0) {
+              nextTimeline = [...current.timeline];
+              nextTimeline[existingIdx] = msg.step;
+            } else {
+              nextTimeline = [...current.timeline, msg.step];
+            }
+            return {
+              ...current,
+              iterations: nextTimeline.length,
+              timeline: nextTimeline
+            };
+          });
+        }
+        if (msg.type === "converged") {
+          setLiveReasoning("");
+          setLiveContent("");
+          setExecutingTool(null);
+          setActiveInteraction(null);
+          if (msg.final_answer) {
+            setOutput((prev) => ({
+              ...prev || {
+                success: true,
+                final_answer: msg.final_answer || "",
+                iterations: msg.iterations || 1,
+                tool_call_count: 0,
+                self_corrections_count: 0,
+                token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+                total_duration_ms: 0,
+                timeline: []
+              },
+              success: true,
+              final_answer: msg.final_answer || "",
+              iterations: msg.iterations || (prev == null ? void 0 : prev.iterations) || 1
+            }));
+          }
         }
       }
     });
@@ -7590,7 +7862,7 @@ function ViewerApp() {
       clearTimeout(timer);
       ro.disconnect();
     };
-  }, [output, showRawJson]);
+  }, [output, activeInteraction, liveReasoning, executingTool, showRawJson]);
   const handleCopyAnswer = () => {
     if (!(output == null ? void 0 : output.final_answer)) return;
     navigator.clipboard.writeText(output.final_answer);
@@ -7603,31 +7875,128 @@ function ViewerApp() {
     setCopiedRaw(true);
     setTimeout(() => setCopiedRaw(false), 2e3);
   };
-  if (!output) {
+  const handleSubmitAskHuman = reactExports.useCallback(async () => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, {
+        text: humanInputText.trim() || "Confirmed"
+      });
+      setActiveInteraction(null);
+      setHumanInputText("");
+    } catch (err) {
+      console.error("[agent viewer] submit ask_human failed:", err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction, humanInputText]);
+  const handleApproveTool = reactExports.useCallback(async () => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, { approved: true });
+      setActiveInteraction(null);
+    } catch (err) {
+      console.error("[agent viewer] approve tool failed:", err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction]);
+  const handleRejectTool = reactExports.useCallback(async () => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, {
+        approved: false,
+        reason: rejectReasonText.trim() || "Rejected by human user"
+      });
+      setActiveInteraction(null);
+      setRejectReasonText("");
+    } catch (err) {
+      console.error("[agent viewer] reject tool failed:", err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction, rejectReasonText]);
+  const handleStepDebugAction = reactExports.useCallback(async (action) => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, { action });
+      setActiveInteraction(null);
+    } catch (err) {
+      console.error("[agent viewer] step debug failed:", err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction]);
+  const handleSendInterruption = reactExports.useCallback(async () => {
+    const text = interruptionText.trim();
+    if (!text) return;
+    try {
+      await interruptAgent(executionId, text);
+      setOutput((prev) => {
+        const current = prev || {
+          success: false,
+          final_answer: "",
+          iterations: 1,
+          tool_call_count: 0,
+          self_corrections_count: 0,
+          token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          total_duration_ms: 0,
+          timeline: []
+        };
+        const stepIdx = current.timeline.length + 1;
+        const stepEntry = {
+          step_index: stepIdx,
+          step_type: "interrupted",
+          thought: text,
+          tool_calls: [],
+          duration_ms: 0,
+          self_correction: false,
+          human_response: { text }
+        };
+        return {
+          ...current,
+          iterations: current.timeline.length + 1,
+          timeline: [...current.timeline, stepEntry]
+        };
+      });
+      setInterruptionNotice(t("中途介入指令已排入！将在当前步骤完成后注入对话上下文", "Instruction queued! Will steer agent at next step boundary."));
+      setInterruptionText("");
+      setTimeout(() => setInterruptionNotice(null), 4e3);
+    } catch (err) {
+      console.error("[agent viewer] send interruption failed:", err);
+    }
+  }, [executionId, interruptionText]);
+  if (!output && !activeInteraction && !liveReasoning && !executingTool) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel", style: { textAlign: "center", padding: "40px 20px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--fg-soft)", fontSize: "13px" }, children: t("等待 Agent 执行产物或加载中...", "Waiting for Agent execution output...") }) });
   }
   const {
-    success,
-    final_answer,
-    iterations,
-    tool_call_count,
-    self_corrections_count,
-    token_usage,
-    total_duration_ms,
+    success = false,
+    final_answer = "",
+    iterations = 0,
+    tool_call_count = 0,
+    self_corrections_count = 0,
+    token_usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    total_duration_ms = 0,
     timeline = []
-  } = output;
+  } = output || {};
+  const isFinished = Boolean(
+    final_answer || !liveReasoning && !executingTool && !activeInteraction && timeline.some((s) => s.step_type === "final_answer" || s.step_type === "error")
+  );
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "panel", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "8px" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "8px", flexWrap: "wrap" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs(
             "span",
             {
-              className: `badge ${success ? "badge-ok" : "badge-danger"}`,
+              className: `badge ${success ? "badge-ok" : activeInteraction ? "badge-warn" : "badge-accent"}`,
               style: { fontSize: "12px", padding: "3px 10px" },
               children: [
-                success ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheckCircle, { size: 14 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconXCircle, { size: 14 }),
-                success ? t("目标收敛达成", "Goal Converged") : t("执行失败 / 未收敛", "Failed / Diverged")
+                success ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheckCircle, { size: 14 }) : activeInteraction ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconHelpCircle, { size: 14 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 14 }),
+                success ? t("目标收敛达成", "Goal Converged") : activeInteraction ? t("等待人类协同 (Waiting Human)", "Waiting Human (HITL)") : t("执行中 / 推理中", "Executing / Reasoning")
               ]
             }
           ),
@@ -7636,16 +8005,30 @@ function ViewerApp() {
             t(`自我修复: ${self_corrections_count} 次`, `Self-Corrections: ${self_corrections_count}`)
           ] })
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "row", style: { gap: "6px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { type: "button", className: "btn btn-sm", onClick: handleCopyRaw, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(IconCopy, { size: 12 }),
-          copiedRaw ? t("已复制", "Copied") : t("复制 Raw JSON", "Copy Raw JSON")
-        ] }) })
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              type: "button",
+              className: "btn btn-sm",
+              onClick: () => setShowRawJson((prev) => !prev),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconCode, { size: 12 }),
+                showRawJson ? t("隐藏 JSON", "Hide JSON") : t("查看 JSON", "View JSON")
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { type: "button", className: "btn btn-sm", onClick: handleCopyRaw, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(IconCopy, { size: 12 }),
+            copiedRaw ? t("已复制", "Copied") : t("复制 Raw", "Copy Raw")
+          ] })
+        ] })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "16px", marginTop: "4px", flexWrap: "wrap" }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", color: "var(--fg-muted)", fontSize: "12px" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx(IconClock, { size: 14 }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-            t("总耗时:", "Duration:"),
+            t("耗时:", "Duration:"),
             " ",
             /* @__PURE__ */ jsxRuntimeExports.jsxs("strong", { style: { color: "var(--fg)" }, children: [
               (total_duration_ms / 1e3).toFixed(2),
@@ -7687,6 +8070,180 @@ function ViewerApp() {
         ] })
       ] })
     ] }),
+    activeInteraction && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        className: `hitl-card ${activeInteraction.interaction_type === "ask_human" ? "hitl-card-ask" : activeInteraction.interaction_type === "confirmation" ? "hitl-card-confirm" : "hitl-card-pause"}`,
+        children: [
+          activeInteraction.interaction_type === "ask_human" && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", fontWeight: 600, color: "var(--accent-strong)", fontSize: "14px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 18 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("AI 向您提问 / 请求输入", "AI Requests Human Clarification") })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-accent", children: t(`第 ${activeInteraction.step_index || 1} 轮`, `Step ${activeInteraction.step_index || 1}`) })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "div",
+              {
+                style: {
+                  background: "var(--bg)",
+                  padding: "12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--accent-border)",
+                  fontSize: "13px",
+                  lineHeight: 1.6,
+                  color: "var(--fg)",
+                  fontWeight: 500
+                },
+                children: activeInteraction.prompt
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", style: { gap: "6px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("label", { style: { fontSize: "12px", fontWeight: 600 }, children: t("您的回复 / 参数输入 (Submit your response):", "Your Reply / Input:") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "textarea",
+                {
+                  rows: 3,
+                  value: humanInputText,
+                  onChange: (e) => setHumanInputText(e.target.value),
+                  placeholder: t(
+                    "输入补充信息、参数数值或指示内容...",
+                    "Type your answer, missing parameter values, or instructions here..."
+                  ),
+                  style: { background: "var(--bg)", width: "100%" }
+                }
+              )
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "row", style: { justifyContent: "flex-end", gap: "8px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "button",
+              {
+                type: "button",
+                className: "btn btn-primary",
+                disabled: submittingInteraction || !humanInputText.trim(),
+                onClick: handleSubmitAskHuman,
+                style: { minWidth: "110px" },
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(IconSend, { size: 13 }),
+                  submittingInteraction ? t("提交中...", "Submitting...") : t("提交回复并继续", "Submit & Continue")
+                ]
+              }
+            ) })
+          ] }),
+          activeInteraction.interaction_type === "confirmation" && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", fontWeight: 600, color: "var(--warn)", fontSize: "14px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconShield, { size: 18 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("敏感工具调用审批 (Approval Required)", "Human Approval Required for Tool Call") })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-warn", children: activeInteraction.tool_name || activeInteraction.tool_id })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", color: "var(--fg)" }, children: activeInteraction.prompt }),
+            activeInteraction.input_args && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", style: { gap: "4px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: "11px", color: "var(--fg-muted)" }, children: t("即将执行的参数 Payload:", "Pending Input Arguments:") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "160px" }, children: typeof activeInteraction.input_args === "object" ? JSON.stringify(activeInteraction.input_args, null, 2) : String(activeInteraction.input_args) })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "col", style: { gap: "6px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "text",
+                value: rejectReasonText,
+                onChange: (e) => setRejectReasonText(e.target.value),
+                placeholder: t("拒绝理由 / 纠偏说明 (可选，若拒绝将作为反馈传给大模型反思)", "Rejection reason / feedback (optional if rejecting)..."),
+                style: { background: "var(--bg)", fontSize: "12px" }
+              }
+            ) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "flex-end", gap: "10px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  type: "button",
+                  className: "btn btn-danger",
+                  disabled: submittingInteraction,
+                  onClick: handleRejectTool,
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconX, { size: 13 }),
+                    t("拒绝执行 (Reject)", "Reject Call")
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  type: "button",
+                  className: "btn btn-primary",
+                  disabled: submittingInteraction,
+                  onClick: handleApproveTool,
+                  style: { background: "var(--ok)", borderColor: "var(--ok)" },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 13 }),
+                    t("批准执行 (Approve)", "Approve & Execute")
+                  ]
+                }
+              )
+            ] })
+          ] }),
+          activeInteraction.interaction_type === "step_pause" && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", fontWeight: 600, color: "var(--info)", fontSize: "14px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconPause, { size: 18 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("单步调试暂停 (Step-by-Step Debug Paused)", "Step-by-Step Debug Paused") })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-accent", children: t(`Step ${activeInteraction.step_index || 1}`, `Step ${activeInteraction.step_index || 1}`) })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", color: "var(--fg)" }, children: activeInteraction.prompt }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "flex-end", gap: "10px", marginTop: "4px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  type: "button",
+                  className: "btn",
+                  disabled: submittingInteraction,
+                  onClick: () => handleStepDebugAction("run_to_end"),
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconPlay, { size: 13 }),
+                    t("执行到底 (Run to End)", "Run to End")
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  type: "button",
+                  className: "btn btn-primary",
+                  disabled: submittingInteraction,
+                  onClick: () => handleStepDebugAction("next_step"),
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconActivity, { size: 13 }),
+                    t("单步推进 (Next Step)", "Next Step")
+                  ]
+                }
+              )
+            ] })
+          ] })
+        ]
+      }
+    ),
+    (liveReasoning || liveContent || executingTool) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", style: { border: "1px dashed var(--accent)", background: "var(--accent-soft)" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", color: "var(--accent-strong)", fontWeight: 600 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 16, className: "animate-pulse" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("正在实时思考与执行 (Streaming Reasoning)...", "Agent Reasoning in Progress...") })
+        ] }),
+        executingTool && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-accent animate-pulse", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 12 }),
+          t(`正在调用: ${executingTool.tool_name}`, `Invoking: ${executingTool.tool_name}`)
+        ] })
+      ] }),
+      liveReasoning && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "reasoning-box", style: { marginTop: "4px", background: "var(--bg)" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, fontSize: "11px", color: "var(--accent-strong)", marginBottom: "4px" }, children: t("思维链 (Chain of Thought):", "Reasoning Trace:") }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.5 }, children: [
+          liveReasoning,
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "animate-pulse", style: { color: "var(--accent)", fontWeight: "bold" }, children: "▊" })
+        ] })
+      ] }),
+      liveContent && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", color: "var(--fg)", whiteSpace: "pre-wrap", marginTop: "6px" }, children: liveContent })
+    ] }),
     final_answer && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", style: { borderLeft: "3px solid var(--accent)" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card-title", style: { color: "var(--accent-strong)" }, children: [
@@ -7722,113 +8279,241 @@ function ViewerApp() {
         t("步", "Steps"),
         ")"
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: "10px" }, children: timeline.map((step, idx) => {
-        var _a2;
-        return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "timeline-item", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "div",
-            {
-              className: `timeline-node ${step.self_correction ? "correction" : step.step_type === "error" ? "error" : "ok"}`,
-              children: step.step_index || idx + 1
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", alignItems: "center" }, children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600, fontSize: "13px" }, children: t(`Round ${step.step_index || idx + 1}`, `Round ${step.step_index || idx + 1}`) }),
-              step.self_correction && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-warn", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx(IconRotateCcw, { size: 10 }),
-                t("自我修复", "Self-Correction")
-              ] }),
-              step.step_type === "final_answer" && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-ok", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 10 }),
-                t("收敛结论", "Final Answer")
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", color: "var(--fg-soft)" }, children: [
-              step.duration_ms,
-              "ms",
-              ((_a2 = step.tokens) == null ? void 0 : _a2.total_tokens) ? ` · ${step.tokens.total_tokens} tokens` : ""
-            ] })
-          ] }),
-          step.thought && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "reasoning-box", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: "10px" }, children: [
+        timeline.map((step, idx) => {
+          var _a2;
+          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "timeline-item", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
               "div",
               {
-                style: {
-                  fontWeight: 600,
-                  fontSize: "11px",
-                  color: "var(--accent-strong)",
-                  marginBottom: "4px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px"
-                },
-                children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
-                  t("思维链 (Chain-of-Thought / Reasoning):", "Reasoning / Thought:")
-                ]
+                className: `timeline-node ${step.step_type === "interrupted" ? "ok" : step.self_correction ? "correction" : step.step_type === "error" ? "error" : "ok"}`,
+                children: step.step_index || idx + 1
               }
             ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.5 }, children: step.thought })
-          ] }),
-          step.tool_calls && step.tool_calls.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }, children: step.tool_calls.map((tc2, tcIdx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 14 }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: tc2.tool_name || tc2.tool_id }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-accent", children: tc2.node_type })
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", alignItems: "center" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", flexWrap: "wrap" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600, fontSize: "13px" }, children: t(`Round ${step.step_index || idx + 1}`, `Round ${step.step_index || idx + 1}`) }),
+                step.step_type === "interrupted" && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-ok", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(IconUser, { size: 11 }),
+                  t("人类中途插话/纠偏", "Human Interruption")
+                ] }),
+                step.self_correction && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-warn", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(IconRotateCcw, { size: 10 }),
+                  t("自我修复", "Self-Correction")
+                ] }),
+                step.step_type === "final_answer" && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-ok", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 10 }),
+                  t("收敛结论", "Final Answer")
+                ] })
               ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", color: "var(--fg-soft)" }, children: [
+                step.duration_ms,
+                "ms",
+                ((_a2 = step.tokens) == null ? void 0 : _a2.total_tokens) ? ` · ${step.tokens.total_tokens} tokens` : ""
+              ] })
+            ] }),
+            step.thought && step.step_type === "interrupted" ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "hitl-card hitl-card-interrupted", style: { marginTop: "6px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", fontWeight: 600, color: "var(--ok)", fontSize: "12px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconUser, { size: 14 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("人类中途插话 / 纠偏指令 (Human Directive):", "Human Directive / Steering:") })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", lineHeight: 1.5, color: "var(--fg)", fontWeight: 500 }, children: step.thought })
+            ] }) : step.thought ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "reasoning-box", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                "span",
-                {
-                  className: `badge ${tc2.success ? "badge-ok" : "badge-danger"}`,
-                  children: [
-                    tc2.success ? t("执行成功", "Success") : t("执行失败", "Failed"),
-                    " ",
-                    "(",
-                    tc2.duration_ms,
-                    "ms)"
-                  ]
-                }
-              )
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("入参 Payload:", "Input Arguments:") }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", children: typeof tc2.input_args === "object" ? JSON.stringify(tc2.input_args, null, 2) : String(tc2.input_args) })
-            ] }),
-            tc2.error_message ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--danger)", marginBottom: "2px" }, children: t("底层报错 (Error Context):", "Error Context:") }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "div",
                 {
-                  className: "code-block",
-                  style: { background: "var(--danger-soft)", color: "var(--danger)" },
-                  children: tc2.error_message
+                  style: {
+                    fontWeight: 600,
+                    fontSize: "11px",
+                    color: "var(--accent-strong)",
+                    marginBottom: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px"
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
+                    t("思维链 (Chain-of-Thought / Reasoning):", "Reasoning / Thought:")
+                  ]
                 }
-              )
-            ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("协议原始响应 (Raw Response):", "Raw Response:") }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", children: tc2.output_data ? JSON.stringify(tc2.output_data, null, 2) : tc2.raw_response })
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.5 }, children: step.thought })
+            ] }) : null,
+            step.tool_calls && step.tool_calls.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }, children: step.tool_calls.map((tc2, tcIdx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", flexWrap: "wrap" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+                  tc2.tool_name === "ask_human" ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 14 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 14 }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: tc2.tool_name || tc2.tool_id }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-accent", children: tc2.node_type })
+                ] }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "span",
+                  {
+                    className: `badge ${tc2.success ? "badge-ok" : "badge-danger"}`,
+                    children: [
+                      tc2.success ? t("执行成功", "Success") : t("执行失败", "Failed"),
+                      " ",
+                      "(",
+                      tc2.duration_ms,
+                      "ms)"
+                    ]
+                  }
+                )
+              ] }),
+              tc2.tool_name === "ask_human" ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "div",
+                  {
+                    style: {
+                      background: "var(--accent-soft)",
+                      border: "1px solid var(--accent-border)",
+                      borderRadius: "6px",
+                      padding: "8px 10px"
+                    },
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--accent-strong)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }, children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 13 }),
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("AI 提问内容 (Question):", "AI Question:") })
+                      ] }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "12px", lineHeight: 1.5, color: "var(--fg)", whiteSpace: "pre-wrap" }, children: typeof tc2.input_args === "object" && tc2.input_args !== null && tc2.input_args.question ? String(tc2.input_args.question) : typeof tc2.input_args === "string" ? tc2.input_args : JSON.stringify(tc2.input_args, null, 2) })
+                    ]
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "div",
+                  {
+                    style: {
+                      background: "var(--ok-soft)",
+                      border: "1px solid var(--ok)",
+                      borderRadius: "6px",
+                      padding: "8px 10px"
+                    },
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--ok)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }, children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsx(IconUser, { size: 13 }),
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("您的回复内容 (Your Response):", "Your Response:") })
+                      ] }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "12px", lineHeight: 1.5, color: "var(--fg)", fontWeight: 500, whiteSpace: "pre-wrap" }, children: typeof tc2.output_data === "object" && tc2.output_data !== null && (tc2.output_data.user_response || tc2.output_data.answer) ? String(tc2.output_data.user_response || tc2.output_data.answer) : tc2.raw_response ? tc2.raw_response : typeof tc2.output_data === "string" ? tc2.output_data : JSON.stringify(tc2.output_data, null, 2) })
+                    ]
+                  }
+                )
+              ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("入参 Payload:", "Input Arguments:") }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", children: typeof tc2.input_args === "object" ? JSON.stringify(tc2.input_args, null, 2) : String(tc2.input_args) })
+                ] }),
+                tc2.output_data !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("执行输出 (Output):", "Output Data:") }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "180px" }, children: typeof tc2.output_data === "object" ? JSON.stringify(tc2.output_data, null, 2) : String(tc2.output_data) })
+                ] })
+              ] }),
+              tc2.error_message && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--danger)", marginBottom: "2px" }, children: t("错误详情 (Error):", "Error Message:") }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "div",
+                  {
+                    className: "code-block",
+                    style: {
+                      borderColor: "var(--danger)",
+                      color: "var(--danger)",
+                      background: "var(--danger-soft)"
+                    },
+                    children: tc2.error_message
+                  }
+                )
+              ] })
+            ] }, tc2.call_id || tcIdx)) })
+          ] }, step.step_index || idx);
+        }),
+        (liveReasoning || liveContent || executingTool) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "timeline-item", style: { borderLeftStyle: "dashed", borderLeftColor: "var(--accent)" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "timeline-node ok animate-pulse", style: { borderColor: "var(--accent)", background: "var(--accent-soft)" }, children: timeline.length + 1 }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "row", style: { justifyContent: "space-between", alignItems: "center" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600, fontSize: "13px", color: "var(--accent-strong)" }, children: t(`Round ${timeline.length + 1} (正在执行)`, `Round ${timeline.length + 1} (In Progress)`) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-accent animate-pulse", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
+              executingTool ? t(`调用工具: ${executingTool.tool_name}`, `Tool: ${executingTool.tool_name}`) : t("大模型思考中", "Thinking...")
             ] })
-          ] }, tc2.call_id || tcIdx)) })
-        ] }, step.step_index || idx);
-      }) })
+          ] }) }),
+          liveReasoning && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "reasoning-box", style: { marginTop: "8px" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontWeight: 600, fontSize: "11px", color: "var(--accent-strong)", marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
+              t("实时思维链 (Streaming CoT):", "Streaming Reasoning Trace:")
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.5 }, children: [
+              liveReasoning,
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "animate-pulse", style: { color: "var(--accent)", fontWeight: "bold" }, children: "▊" })
+            ] })
+          ] }),
+          liveContent && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", color: "var(--fg)", whiteSpace: "pre-wrap", marginTop: "6px" }, children: liveContent }),
+          executingTool && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", style: { border: "1px solid var(--accent)", background: "var(--accent-soft)", marginTop: "8px" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 14, className: "animate-pulse" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: executingTool.tool_name || executingTool.tool_id })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-accent animate-pulse", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconClock, { size: 11 }),
+                t("正在执行...", "Executing...")
+              ] })
+            ] }),
+            executingTool.input_args !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("入参 Payload:", "Input Arguments:") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { background: "var(--bg)" }, children: typeof executingTool.input_args === "object" ? JSON.stringify(executingTool.input_args, null, 2) : String(executingTool.input_args) })
+            ] })
+          ] })
+        ] })
+      ] })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "button",
-        {
-          type: "button",
-          className: "btn",
-          style: { width: "100%", justifyContent: "space-between" },
-          onClick: () => setShowRawJson((prev) => !prev),
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("查看完整 Raw JSON 链路数据", "View Full Raw JSON Trace Data") }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: "11px", color: "var(--fg-soft)" }, children: showRawJson ? t("折叠 ▲", "Collapse ▲") : t("展开 ▼", "Expand ▼") })
-          ]
-        }
-      ),
-      showRawJson && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { marginTop: "8px", maxHeight: "400px", overflowY: "auto" }, children: JSON.stringify(output, null, 2) })
+    !isFinished && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", style: { background: "var(--bg-subtle)", border: "1px solid var(--border)" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", alignItems: "center" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", fontWeight: 600, fontSize: "13px" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(IconZap, { size: 16, style: { color: "var(--accent)" } }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("中途补充要求 / 纠偏插话 (Steer Agent)", "Steer Agent (Mid-flight Interruption)") })
+        ] }),
+        interruptionNotice && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-ok animate-pulse", style: { fontSize: "11px" }, children: interruptionNotice })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "8px", marginTop: "6px" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "text",
+            value: interruptionText,
+            onChange: (e) => setInterruptionText(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleSendInterruption();
+              }
+            },
+            placeholder: t(
+              '在执行中途输入补充要求或纠偏指令（如"请优先检查最近一小时的错误日志"）...',
+              "Type steering instructions to inject at the next reasoning step..."
+            ),
+            style: { flex: 1, minWidth: 0, background: "var(--bg)" }
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            type: "button",
+            className: "btn btn-primary",
+            disabled: !interruptionText.trim(),
+            onClick: handleSendInterruption,
+            style: { flexShrink: 0 },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(IconSend, { size: 13 }),
+              t("发送指令", "Send Directive")
+            ]
+          }
+        )
+      ] })
+    ] }),
+    showRawJson && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "row", style: { justifyContent: "space-between" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card-title", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(IconCode, { size: 16 }),
+        t("完整原始执行产物 (Raw Output JSON)", "Complete Raw JSON Data")
+      ] }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "320px" }, children: JSON.stringify(output, null, 2) })
     ] })
   ] });
 }

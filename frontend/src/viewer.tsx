@@ -1,25 +1,55 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { initBridge, postResize } from './bridge';
+import { initBridge, interruptAgent, postResize, submitHumanResponse } from './bridge';
 import { t } from './i18n';
 import {
+  IconActivity,
   IconBarChart,
+  IconBot,
   IconBrain,
   IconCheck,
   IconCheckCircle,
   IconClock,
+  IconCode,
   IconCopy,
+  IconHelpCircle,
   IconLayers,
+  IconPause,
+  IconPlay,
   IconRotateCcw,
+  IconSend,
+  IconShield,
   IconSparkles,
+  IconUser,
   IconWrench,
+  IconX,
   IconXCircle,
+  IconZap,
 } from './icons';
 import './styles.css';
-import type { AgentReactOutput } from './types';
+import type {
+  AgentReactOutput,
+  PendingInteraction,
+  StreamMessagePayload,
+  TimelineStep,
+} from './types';
 
 function ViewerApp() {
   const [output, setOutput] = useState<AgentReactOutput | null>(null);
+  const [executionId, setExecutionId] = useState<string>('default');
+  const [activeInteraction, setActiveInteraction] = useState<PendingInteraction | null>(null);
+  const [liveReasoning, setLiveReasoning] = useState<string>('');
+  const [liveContent, setLiveContent] = useState<string>('');
+  const [executingTool, setExecutingTool] = useState<{
+    tool_id: string;
+    tool_name: string;
+    input_args?: unknown;
+  } | null>(null);
+  const [humanInputText, setHumanInputText] = useState<string>('');
+  const [rejectReasonText, setRejectReasonText] = useState<string>('');
+  const [interruptionText, setInterruptionText] = useState<string>('');
+  const [submittingInteraction, setSubmittingInteraction] = useState<boolean>(false);
+  const [interruptionNotice, setInterruptionNotice] = useState<string | null>(null);
   const [copiedAnswer, setCopiedAnswer] = useState(false);
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
@@ -29,11 +59,15 @@ function ViewerApp() {
       onInit: (config, _nodes, initPayload) => {
         const payload = initPayload || (config as unknown as Record<string, unknown>);
         const nodeReport = (payload?.node_report || {}) as Record<string, unknown>;
-        const candidate = payload?.reportData
-          || payload?.outputData
-          || nodeReport?.plugin_data
-          || nodeReport?.output_data
-          || config;
+        const execId = String(nodeReport?.execution_id || 'default');
+        setExecutionId(execId);
+
+        const candidate =
+          payload?.reportData ||
+          payload?.outputData ||
+          nodeReport?.plugin_data ||
+          nodeReport?.output_data ||
+          config;
 
         if (candidate && typeof candidate === 'object' && Object.keys(candidate).length > 0) {
           setOutput(candidate as unknown as AgentReactOutput);
@@ -42,6 +76,141 @@ function ViewerApp() {
       onExecutionUpdate: (data) => {
         if (data && typeof data === 'object') {
           setOutput(data as AgentReactOutput);
+          setLiveReasoning('');
+          setLiveContent('');
+          setExecutingTool(null);
+        }
+      },
+      onStreamMessage: (msg: StreamMessagePayload) => {
+        // 1. LLM Chunk Deltas
+        if (msg.kind === 'reasoning' || typeof msg.delta_reasoning === 'string') {
+          if (msg.fullReasoning) {
+            setLiveReasoning(msg.fullReasoning);
+          } else if (msg.delta_reasoning) {
+            setLiveReasoning((prev) => prev + msg.delta_reasoning);
+          }
+        }
+        if (msg.kind === 'content' || typeof msg.delta_content === 'string') {
+          if (msg.fullContent) {
+            setLiveContent(msg.fullContent);
+          } else if (msg.delta_content) {
+            setLiveContent((prev) => prev + msg.delta_content);
+          }
+        }
+
+        // 2. Tool Lifecycle
+        if (msg.type === 'tool_start') {
+          setExecutingTool({
+            tool_id: msg.tool_id || '',
+            tool_name: msg.tool_name || msg.tool_id || 'tool',
+            input_args: msg.input_args,
+          });
+        } else if (msg.type === 'tool_end') {
+          setExecutingTool(null);
+        }
+
+        // 3. Human in the Loop (HITL) Interruption / Interaction
+        if (msg.type === 'waiting_human' && msg.interaction) {
+          setActiveInteraction(msg.interaction);
+          if (msg.interaction.execution_id) {
+            setExecutionId(msg.interaction.execution_id);
+          }
+          setHumanInputText('');
+          setRejectReasonText('');
+        } else if (msg.type === 'human_resumed') {
+          setActiveInteraction(null);
+        }
+
+        // 3.5 Interrupted event
+        if (msg.type === 'interrupted' && typeof msg.text === 'string') {
+          const interruptedText = msg.text;
+          setOutput((prev) => {
+            const current = prev || {
+              success: false,
+              final_answer: '',
+              iterations: 1,
+              tool_call_count: 0,
+              self_corrections_count: 0,
+              token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              total_duration_ms: 0,
+              timeline: [],
+            };
+            if (current.timeline.some((s) => s.step_type === 'interrupted' && s.thought === interruptedText)) {
+              return current;
+            }
+            const stepIdx = current.timeline.length + 1;
+            const stepEntry: TimelineStep = {
+              step_index: stepIdx,
+              step_type: 'interrupted',
+              thought: interruptedText,
+              tool_calls: [],
+              duration_ms: 0,
+              self_correction: false,
+              human_response: { text: interruptedText },
+            };
+            return {
+              ...current,
+              iterations: current.timeline.length + 1,
+              timeline: [...current.timeline, stepEntry],
+            };
+          });
+        }
+        if (msg.type === 'step_completed' && msg.step) {
+          setLiveReasoning('');
+          setLiveContent('');
+          setExecutingTool(null);
+          setOutput((prev) => {
+            const current = prev || {
+              success: false,
+              final_answer: '',
+              iterations: 1,
+              tool_call_count: 0,
+              self_corrections_count: 0,
+              token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              total_duration_ms: 0,
+              timeline: [],
+            };
+            const existingIdx = current.timeline.findIndex(
+              (s) => s.step_index === msg.step?.step_index
+            );
+            let nextTimeline: TimelineStep[];
+            if (existingIdx >= 0) {
+              nextTimeline = [...current.timeline];
+              nextTimeline[existingIdx] = msg.step;
+            } else {
+              nextTimeline = [...current.timeline, msg.step];
+            }
+            return {
+              ...current,
+              iterations: nextTimeline.length,
+              timeline: nextTimeline,
+            };
+          });
+        }
+
+        // 5. Converged Final Answer
+        if (msg.type === 'converged') {
+          setLiveReasoning('');
+          setLiveContent('');
+          setExecutingTool(null);
+          setActiveInteraction(null);
+          if (msg.final_answer) {
+            setOutput((prev) => ({
+              ...(prev || {
+                success: true,
+                final_answer: msg.final_answer || '',
+                iterations: msg.iterations || 1,
+                tool_call_count: 0,
+                self_corrections_count: 0,
+                token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+                total_duration_ms: 0,
+                timeline: [],
+              }),
+              success: true,
+              final_answer: msg.final_answer || '',
+              iterations: msg.iterations || prev?.iterations || 1,
+            }));
+          }
         }
       },
     });
@@ -73,7 +242,8 @@ function ViewerApp() {
       clearTimeout(timer);
       ro.disconnect();
     };
-  }, [output, showRawJson]);
+  }, [output, activeInteraction, liveReasoning, executingTool, showRawJson]);
+
   const handleCopyAnswer = () => {
     if (!output?.final_answer) return;
     navigator.clipboard.writeText(output.final_answer);
@@ -88,7 +258,106 @@ function ViewerApp() {
     setTimeout(() => setCopiedRaw(false), 2000);
   };
 
-  if (!output) {
+  const handleSubmitAskHuman = useCallback(async () => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, {
+        text: humanInputText.trim() || 'Confirmed',
+      });
+      setActiveInteraction(null);
+      setHumanInputText('');
+    } catch (err) {
+      console.error('[agent viewer] submit ask_human failed:', err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction, humanInputText]);
+
+  const handleApproveTool = useCallback(async () => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, { approved: true });
+      setActiveInteraction(null);
+    } catch (err) {
+      console.error('[agent viewer] approve tool failed:', err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction]);
+
+  const handleRejectTool = useCallback(async () => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, {
+        approved: false,
+        reason: rejectReasonText.trim() || 'Rejected by human user',
+      });
+      setActiveInteraction(null);
+      setRejectReasonText('');
+    } catch (err) {
+      console.error('[agent viewer] reject tool failed:', err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction, rejectReasonText]);
+
+  const handleStepDebugAction = useCallback(async (action: 'next_step' | 'run_to_end') => {
+    if (!activeInteraction) return;
+    setSubmittingInteraction(true);
+    try {
+      await submitHumanResponse(activeInteraction.interaction_id, { action });
+      setActiveInteraction(null);
+    } catch (err) {
+      console.error('[agent viewer] step debug failed:', err);
+    } finally {
+      setSubmittingInteraction(false);
+    }
+  }, [activeInteraction]);
+
+  const handleSendInterruption = useCallback(async () => {
+    const text = interruptionText.trim();
+    if (!text) return;
+    try {
+      await interruptAgent(executionId, text);
+      setOutput((prev) => {
+        const current = prev || {
+          success: false,
+          final_answer: '',
+          iterations: 1,
+          tool_call_count: 0,
+          self_corrections_count: 0,
+          token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          total_duration_ms: 0,
+          timeline: [],
+        };
+        const stepIdx = current.timeline.length + 1;
+        const stepEntry: TimelineStep = {
+          step_index: stepIdx,
+          step_type: 'interrupted',
+          thought: text,
+          tool_calls: [],
+          duration_ms: 0,
+          self_correction: false,
+          human_response: { text },
+        };
+        return {
+          ...current,
+          iterations: current.timeline.length + 1,
+          timeline: [...current.timeline, stepEntry],
+        };
+      });
+      setInterruptionNotice(t('中途介入指令已排入！将在当前步骤完成后注入对话上下文', 'Instruction queued! Will steer agent at next step boundary.'));
+      setInterruptionText('');
+      setTimeout(() => setInterruptionNotice(null), 4000);
+    } catch (err) {
+      console.error('[agent viewer] send interruption failed:', err);
+    }
+  }, [executionId, interruptionText]);
+
+  if (!output && !activeInteraction && !liveReasoning && !executingTool) {
     return (
       <div className="panel" style={{ textAlign: 'center', padding: '40px 20px' }}>
         <div style={{ color: 'var(--fg-soft)', fontSize: '13px' }}>
@@ -99,28 +368,37 @@ function ViewerApp() {
   }
 
   const {
-    success,
-    final_answer,
-    iterations,
-    tool_call_count,
-    self_corrections_count,
-    token_usage,
-    total_duration_ms,
+    success = false,
+    final_answer = '',
+    iterations = 0,
+    tool_call_count = 0,
+    self_corrections_count = 0,
+    token_usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    total_duration_ms = 0,
     timeline = [],
-  } = output;
+  } = output || {};
+
+  const isFinished = Boolean(
+    final_answer ||
+    (!liveReasoning && !executingTool && !activeInteraction && timeline.some((s) => s.step_type === 'final_answer' || s.step_type === 'error'))
+  );
 
   return (
     <div className="panel">
       {/* 1. KPI Metric Dashboard */}
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
-          <div className="row" style={{ gap: '8px' }}>
+          <div className="row" style={{ gap: '8px', flexWrap: 'wrap' }}>
             <span
-              className={`badge ${success ? 'badge-ok' : 'badge-danger'}`}
+              className={`badge ${success ? 'badge-ok' : activeInteraction ? 'badge-warn' : 'badge-accent'}`}
               style={{ fontSize: '12px', padding: '3px 10px' }}
             >
-              {success ? <IconCheckCircle size={14} /> : <IconXCircle size={14} />}
-              {success ? t('目标收敛达成', 'Goal Converged') : t('执行失败 / 未收敛', 'Failed / Diverged')}
+              {success ? <IconCheckCircle size={14} /> : activeInteraction ? <IconHelpCircle size={14} /> : <IconBrain size={14} />}
+              {success
+                ? t('目标收敛达成', 'Goal Converged')
+                : activeInteraction
+                ? t('等待人类协同 (Waiting Human)', 'Waiting Human (HITL)')
+                : t('执行中 / 推理中', 'Executing / Reasoning')}
             </span>
             {self_corrections_count > 0 && (
               <span className="badge badge-warn" style={{ fontSize: '12px', padding: '3px 10px' }}>
@@ -130,9 +408,17 @@ function ViewerApp() {
             )}
           </div>
           <div className="row" style={{ gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setShowRawJson((prev) => !prev)}
+            >
+              <IconCode size={12} />
+              {showRawJson ? t('隐藏 JSON', 'Hide JSON') : t('查看 JSON', 'View JSON')}
+            </button>
             <button type="button" className="btn btn-sm" onClick={handleCopyRaw}>
               <IconCopy size={12} />
-              {copiedRaw ? t('已复制', 'Copied') : t('复制 Raw JSON', 'Copy Raw JSON')}
+              {copiedRaw ? t('已复制', 'Copied') : t('复制 Raw', 'Copy Raw')}
             </button>
           </div>
         </div>
@@ -141,7 +427,7 @@ function ViewerApp() {
           <div className="row" style={{ gap: '6px', color: 'var(--fg-muted)', fontSize: '12px' }}>
             <IconClock size={14} />
             <span>
-              {t('总耗时:', 'Duration:')}{' '}
+              {t('耗时:', 'Duration:')}{' '}
               <strong style={{ color: 'var(--fg)' }}>
                 {(total_duration_ms / 1000).toFixed(2)}s
               </strong>
@@ -179,7 +465,214 @@ function ViewerApp() {
         </div>
       </div>
 
-      {/* 2. Final Answer Card */}
+      {/* 2. Active HITL Interactive Cards */}
+      {activeInteraction && (
+        <div
+          className={`hitl-card ${
+            activeInteraction.interaction_type === 'ask_human'
+              ? 'hitl-card-ask'
+              : activeInteraction.interaction_type === 'confirmation'
+              ? 'hitl-card-confirm'
+              : 'hitl-card-pause'
+          }`}
+        >
+          {activeInteraction.interaction_type === 'ask_human' && (
+            <>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <div className="row" style={{ gap: '6px', fontWeight: 600, color: 'var(--accent-strong)', fontSize: '14px' }}>
+                  <IconBot size={18} />
+                  <span>{t('AI 向您提问 / 请求输入', 'AI Requests Human Clarification')}</span>
+                </div>
+                <span className="badge badge-accent">
+                  {t(`第 ${activeInteraction.step_index || 1} 轮`, `Step ${activeInteraction.step_index || 1}`)}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  background: 'var(--bg)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--accent-border)',
+                  fontSize: '13px',
+                  lineHeight: 1.6,
+                  color: 'var(--fg)',
+                  fontWeight: 500,
+                }}
+              >
+                {activeInteraction.prompt}
+              </div>
+
+              <div className="col" style={{ gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600 }}>
+                  {t('您的回复 / 参数输入 (Submit your response):', 'Your Reply / Input:')}
+                </label>
+                <textarea
+                  rows={3}
+                  value={humanInputText}
+                  onChange={(e) => setHumanInputText(e.target.value)}
+                  placeholder={t(
+                    '输入补充信息、参数数值或指示内容...',
+                    'Type your answer, missing parameter values, or instructions here...'
+                  )}
+                  style={{ background: 'var(--bg)', width: '100%' }}
+                />
+              </div>
+
+              <div className="row" style={{ justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={submittingInteraction || !humanInputText.trim()}
+                  onClick={handleSubmitAskHuman}
+                  style={{ minWidth: '110px' }}
+                >
+                  <IconSend size={13} />
+                  {submittingInteraction ? t('提交中...', 'Submitting...') : t('提交回复并继续', 'Submit & Continue')}
+                </button>
+              </div>
+            </>
+          )}
+
+          {activeInteraction.interaction_type === 'confirmation' && (
+            <>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <div className="row" style={{ gap: '6px', fontWeight: 600, color: 'var(--warn)', fontSize: '14px' }}>
+                  <IconShield size={18} />
+                  <span>{t('敏感工具调用审批 (Approval Required)', 'Human Approval Required for Tool Call')}</span>
+                </div>
+                <span className="badge badge-warn">
+                  {activeInteraction.tool_name || activeInteraction.tool_id}
+                </span>
+              </div>
+
+              <div style={{ fontSize: '13px', color: 'var(--fg)' }}>
+                {activeInteraction.prompt}
+              </div>
+
+              {activeInteraction.input_args && (
+                <div className="col" style={{ gap: '4px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--fg-muted)' }}>{t('即将执行的参数 Payload:', 'Pending Input Arguments:')}</span>
+                  <div className="code-block" style={{ maxHeight: '160px' }}>
+                    {typeof activeInteraction.input_args === 'object'
+                      ? JSON.stringify(activeInteraction.input_args, null, 2)
+                      : String(activeInteraction.input_args)}
+                  </div>
+                </div>
+              )}
+
+              <div className="col" style={{ gap: '6px' }}>
+                <input
+                  type="text"
+                  value={rejectReasonText}
+                  onChange={(e) => setRejectReasonText(e.target.value)}
+                  placeholder={t('拒绝理由 / 纠偏说明 (可选，若拒绝将作为反馈传给大模型反思)', 'Rejection reason / feedback (optional if rejecting)...')}
+                  style={{ background: 'var(--bg)', fontSize: '12px' }}
+                />
+              </div>
+
+              <div className="row" style={{ justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={submittingInteraction}
+                  onClick={handleRejectTool}
+                >
+                  <IconX size={13} />
+                  {t('拒绝执行 (Reject)', 'Reject Call')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={submittingInteraction}
+                  onClick={handleApproveTool}
+                  style={{ background: 'var(--ok)', borderColor: 'var(--ok)' }}
+                >
+                  <IconCheck size={13} />
+                  {t('批准执行 (Approve)', 'Approve & Execute')}
+                </button>
+              </div>
+            </>
+          )}
+
+          {activeInteraction.interaction_type === 'step_pause' && (
+            <>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <div className="row" style={{ gap: '6px', fontWeight: 600, color: 'var(--info)', fontSize: '14px' }}>
+                  <IconPause size={18} />
+                  <span>{t('单步调试暂停 (Step-by-Step Debug Paused)', 'Step-by-Step Debug Paused')}</span>
+                </div>
+                <span className="badge badge-accent">
+                  {t(`Step ${activeInteraction.step_index || 1}`, `Step ${activeInteraction.step_index || 1}`)}
+                </span>
+              </div>
+
+              <div style={{ fontSize: '13px', color: 'var(--fg)' }}>
+                {activeInteraction.prompt}
+              </div>
+
+              <div className="row" style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '4px' }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={submittingInteraction}
+                  onClick={() => handleStepDebugAction('run_to_end')}
+                >
+                  <IconPlay size={13} />
+                  {t('执行到底 (Run to End)', 'Run to End')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={submittingInteraction}
+                  onClick={() => handleStepDebugAction('next_step')}
+                >
+                  <IconActivity size={13} />
+                  {t('单步推进 (Next Step)', 'Next Step')}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 3. Live Streaming Reasoning & Executing Tool Card */}
+      {(liveReasoning || liveContent || executingTool) && (
+        <div className="card" style={{ border: '1px dashed var(--accent)', background: 'var(--accent-soft)' }}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="row" style={{ gap: '6px', color: 'var(--accent-strong)', fontWeight: 600 }}>
+              <IconBrain size={16} className="animate-pulse" />
+              <span>{t('正在实时思考与执行 (Streaming Reasoning)...', 'Agent Reasoning in Progress...')}</span>
+            </div>
+            {executingTool && (
+              <span className="badge badge-accent animate-pulse">
+                <IconWrench size={12} />
+                {t(`正在调用: ${executingTool.tool_name}`, `Invoking: ${executingTool.tool_name}`)}
+              </span>
+            )}
+          </div>
+
+          {liveReasoning && (
+            <div className="reasoning-box" style={{ marginTop: '4px', background: 'var(--bg)' }}>
+              <div style={{ fontWeight: 600, fontSize: '11px', color: 'var(--accent-strong)', marginBottom: '4px' }}>
+                {t('思维链 (Chain of Thought):', 'Reasoning Trace:')}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                {liveReasoning}
+                <span className="animate-pulse" style={{ color: 'var(--accent)', fontWeight: 'bold' }}>▊</span>
+              </div>
+            </div>
+          )}
+
+          {liveContent && (
+            <div style={{ fontSize: '13px', color: 'var(--fg)', whiteSpace: 'pre-wrap', marginTop: '6px' }}>
+              {liveContent}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 4. Final Answer Card */}
       {final_answer && (
         <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -206,7 +699,7 @@ function ViewerApp() {
         </div>
       )}
 
-      {/* 3. Thinking Timeline Detail */}
+      {/* 5. Thinking Timeline Detail */}
       <div className="card">
         <div className="card-title">
           <IconBrain size={16} />
@@ -219,7 +712,9 @@ function ViewerApp() {
             <div key={step.step_index || idx} className="timeline-item">
               <div
                 className={`timeline-node ${
-                  step.self_correction
+                  step.step_type === 'interrupted'
+                    ? 'ok'
+                    : step.self_correction
                     ? 'correction'
                     : step.step_type === 'error'
                     ? 'error'
@@ -230,10 +725,16 @@ function ViewerApp() {
               </div>
 
               <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <div className="row" style={{ gap: '6px' }}>
+                <div className="row" style={{ gap: '6px', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, fontSize: '13px' }}>
                     {t(`Round ${step.step_index || idx + 1}`, `Round ${step.step_index || idx + 1}`)}
                   </span>
+                  {step.step_type === 'interrupted' && (
+                    <span className="badge badge-ok">
+                      <IconUser size={11} />
+                      {t('人类中途插话/纠偏', 'Human Interruption')}
+                    </span>
+                  )}
                   {step.self_correction && (
                     <span className="badge badge-warn">
                       <IconRotateCcw size={10} />
@@ -253,8 +754,18 @@ function ViewerApp() {
                 </div>
               </div>
 
-              {/* Thought / Reasoning content */}
-              {step.thought && (
+              {/* Thought / Reasoning or Human Interruption content */}
+              {step.thought && step.step_type === 'interrupted' ? (
+                <div className="hitl-card hitl-card-interrupted" style={{ marginTop: '6px' }}>
+                  <div className="row" style={{ gap: '6px', fontWeight: 600, color: 'var(--ok)', fontSize: '12px' }}>
+                    <IconUser size={14} />
+                    <span>{t('人类中途插话 / 纠偏指令 (Human Directive):', 'Human Directive / Steering:')}</span>
+                  </div>
+                  <div style={{ fontSize: '13px', lineHeight: 1.5, color: 'var(--fg)', fontWeight: 500 }}>
+                    {step.thought}
+                  </div>
+                </div>
+              ) : step.thought ? (
                 <div className="reasoning-box">
                   <div
                     style={{
@@ -272,16 +783,15 @@ function ViewerApp() {
                   </div>
                   <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{step.thought}</div>
                 </div>
-              )}
-
+              ) : null}
               {/* Tool Calls in this step */}
               {step.tool_calls && step.tool_calls.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
                   {step.tool_calls.map((tc, tcIdx) => (
                     <div key={tc.call_id || tcIdx} className="tool-call-card">
-                      <div className="row" style={{ justifyContent: 'space-between' }}>
+                      <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
                         <div className="row" style={{ gap: '6px' }}>
-                          <IconWrench size={14} />
+                          {tc.tool_name === 'ask_human' ? <IconBot size={14} /> : <IconWrench size={14} />}
                           <strong style={{ fontSize: '12px' }}>{tc.tool_name || tc.tool_id}</strong>
                           <span className="badge badge-accent">{tc.node_type}</span>
                         </div>
@@ -292,41 +802,98 @@ function ViewerApp() {
                           {' '}({tc.duration_ms}ms)
                         </span>
                       </div>
-
-                      {/* Arguments Payload */}
-                      <div>
-                        <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
-                          {t('入参 Payload:', 'Input Arguments:')}
-                        </div>
-                        <div className="code-block">
-                          {typeof tc.input_args === 'object'
-                            ? JSON.stringify(tc.input_args, null, 2)
-                            : String(tc.input_args)}
-                        </div>
-                      </div>
-
-                      {/* Tool Response or Error */}
-                      {tc.error_message ? (
-                        <div>
-                          <div style={{ fontSize: '11px', color: 'var(--danger)', marginBottom: '2px' }}>
-                            {t('底层报错 (Error Context):', 'Error Context:')}
-                          </div>
+                      {tc.tool_name === 'ask_human' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                          {/* AI Question */}
                           <div
-                            className="code-block"
-                            style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}
+                            style={{
+                              background: 'var(--accent-soft)',
+                              border: '1px solid var(--accent-border)',
+                              borderRadius: '6px',
+                              padding: '8px 10px',
+                            }}
                           >
-                            {tc.error_message}
+                            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-strong)', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px' }}>
+                              <IconBot size={13} />
+                              <span>{t('AI 提问内容 (Question):', 'AI Question:')}</span>
+                            </div>
+                            <div style={{ fontSize: '12px', lineHeight: 1.5, color: 'var(--fg)', whiteSpace: 'pre-wrap' }}>
+                              {typeof tc.input_args === 'object' && tc.input_args !== null && (tc.input_args as Record<string, unknown>).question
+                                ? String((tc.input_args as Record<string, unknown>).question)
+                                : typeof tc.input_args === 'string'
+                                ? tc.input_args
+                                : JSON.stringify(tc.input_args, null, 2)}
+                            </div>
+                          </div>
+
+                          {/* User Response */}
+                          <div
+                            style={{
+                              background: 'var(--ok-soft)',
+                              border: '1px solid var(--ok)',
+                              borderRadius: '6px',
+                              padding: '8px 10px',
+                            }}
+                          >
+                            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--ok)', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px' }}>
+                              <IconUser size={13} />
+                              <span>{t('您的回复内容 (Your Response):', 'Your Response:')}</span>
+                            </div>
+                            <div style={{ fontSize: '12px', lineHeight: 1.5, color: 'var(--fg)', fontWeight: 500, whiteSpace: 'pre-wrap' }}>
+                              {typeof tc.output_data === 'object' && tc.output_data !== null && ((tc.output_data as Record<string, unknown>).user_response || (tc.output_data as Record<string, unknown>).answer)
+                                ? String((tc.output_data as Record<string, unknown>).user_response || (tc.output_data as Record<string, unknown>).answer)
+                                : tc.raw_response
+                                ? tc.raw_response
+                                : typeof tc.output_data === 'string'
+                                ? tc.output_data
+                                : JSON.stringify(tc.output_data, null, 2)}
+                            </div>
                           </div>
                         </div>
                       ) : (
-                        <div>
-                          <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
-                            {t('协议原始响应 (Raw Response):', 'Raw Response:')}
+                        <>
+                          {/* Arguments Payload */}
+                          <div>
+                            <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
+                              {t('入参 Payload:', 'Input Arguments:')}
+                            </div>
+                            <div className="code-block">
+                              {typeof tc.input_args === 'object'
+                                ? JSON.stringify(tc.input_args, null, 2)
+                                : String(tc.input_args)}
+                            </div>
                           </div>
-                          <div className="code-block">
-                            {tc.output_data
-                              ? JSON.stringify(tc.output_data, null, 2)
-                              : tc.raw_response}
+
+                          {/* Output result or error */}
+                          {tc.output_data !== undefined && (
+                            <div>
+                              <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
+                                {t('执行输出 (Output):', 'Output Data:')}
+                              </div>
+                              <div className="code-block" style={{ maxHeight: '180px' }}>
+                                {typeof tc.output_data === 'object'
+                                  ? JSON.stringify(tc.output_data, null, 2)
+                                  : String(tc.output_data)}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {tc.error_message && (
+                        <div>
+                          <div style={{ fontSize: '11px', color: 'var(--danger)', marginBottom: '2px' }}>
+                            {t('错误详情 (Error):', 'Error Message:')}
+                          </div>
+                          <div
+                            className="code-block"
+                            style={{
+                              borderColor: 'var(--danger)',
+                              color: 'var(--danger)',
+                              background: 'var(--danger-soft)',
+                            }}
+                          >
+                            {tc.error_message}
                           </div>
                         </div>
                       )}
@@ -336,28 +903,137 @@ function ViewerApp() {
               )}
             </div>
           ))}
+
+          {/* Active In-Progress Round inside Timeline */}
+          {(liveReasoning || liveContent || executingTool) && (
+            <div className="timeline-item" style={{ borderLeftStyle: 'dashed', borderLeftColor: 'var(--accent)' }}>
+              <div className="timeline-node ok animate-pulse" style={{ borderColor: 'var(--accent)', background: 'var(--accent-soft)' }}>
+                {timeline.length + 1}
+              </div>
+
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="row" style={{ gap: '6px' }}>
+                  <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--accent-strong)' }}>
+                    {t(`Round ${timeline.length + 1} (正在执行)`, `Round ${timeline.length + 1} (In Progress)`)}
+                  </span>
+                  <span className="badge badge-accent animate-pulse">
+                    <IconBrain size={12} />
+                    {executingTool ? t(`调用工具: ${executingTool.tool_name}`, `Tool: ${executingTool.tool_name}`) : t('大模型思考中', 'Thinking...')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Streaming Thought / Reasoning */}
+              {liveReasoning && (
+                <div className="reasoning-box" style={{ marginTop: '8px' }}>
+                  <div style={{ fontWeight: 600, fontSize: '11px', color: 'var(--accent-strong)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <IconBrain size={12} />
+                    {t('实时思维链 (Streaming CoT):', 'Streaming Reasoning Trace:')}
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    {liveReasoning}
+                    <span className="animate-pulse" style={{ color: 'var(--accent)', fontWeight: 'bold' }}>▊</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Streaming Content */}
+              {liveContent && (
+                <div style={{ fontSize: '13px', color: 'var(--fg)', whiteSpace: 'pre-wrap', marginTop: '6px' }}>
+                  {liveContent}
+                </div>
+              )}
+
+              {/* Executing Tool Card */}
+              {executingTool && (
+                <div className="tool-call-card" style={{ border: '1px solid var(--accent)', background: 'var(--accent-soft)', marginTop: '8px' }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <div className="row" style={{ gap: '6px' }}>
+                      <IconWrench size={14} className="animate-pulse" />
+                      <strong style={{ fontSize: '12px' }}>{executingTool.tool_name || executingTool.tool_id}</strong>
+                    </div>
+                    <span className="badge badge-accent animate-pulse">
+                      <IconClock size={11} />
+                      {t('正在执行...', 'Executing...')}
+                    </span>
+                  </div>
+                  {executingTool.input_args !== undefined && (
+                    <div>
+                      <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
+                        {t('入参 Payload:', 'Input Arguments:')}
+                      </div>
+                      <div className="code-block" style={{ background: 'var(--bg)' }}>
+                        {typeof executingTool.input_args === 'object'
+                          ? JSON.stringify(executingTool.input_args, null, 2)
+                          : String(executingTool.input_args)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
+      {/* 6. Mid-flight Smooth Interruption / Steering Bar (Only visible while agent is running) */}
+      {!isFinished && (
+        <div className="card" style={{ background: 'var(--bg-subtle)', border: '1px solid var(--border)' }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="row" style={{ gap: '6px', fontWeight: 600, fontSize: '13px' }}>
+              <IconZap size={16} style={{ color: 'var(--accent)' }} />
+              <span>{t('中途补充要求 / 纠偏插话 (Steer Agent)', 'Steer Agent (Mid-flight Interruption)')}</span>
+            </div>
+            {interruptionNotice && (
+              <span className="badge badge-ok animate-pulse" style={{ fontSize: '11px' }}>
+                {interruptionNotice}
+              </span>
+            )}
+          </div>
 
-      {/* 4. Raw JSON Toggle */}
-      <div className="card">
-        <button
-          type="button"
-          className="btn"
-          style={{ width: '100%', justifyContent: 'space-between' }}
-          onClick={() => setShowRawJson((prev) => !prev)}
-        >
-          <span>{t('查看完整 Raw JSON 链路数据', 'View Full Raw JSON Trace Data')}</span>
-          <span style={{ fontSize: '11px', color: 'var(--fg-soft)' }}>
-            {showRawJson ? t('折叠 ▲', 'Collapse ▲') : t('展开 ▼', 'Expand ▼')}
-          </span>
-        </button>
-        {showRawJson && (
-          <div className="code-block" style={{ marginTop: '8px', maxHeight: '400px', overflowY: 'auto' }}>
+          <div className="row" style={{ gap: '8px', marginTop: '6px' }}>
+            <input
+              type="text"
+              value={interruptionText}
+              onChange={(e) => setInterruptionText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void handleSendInterruption();
+                }
+              }}
+              placeholder={t(
+                '在执行中途输入补充要求或纠偏指令（如"请优先检查最近一小时的错误日志"）...',
+                'Type steering instructions to inject at the next reasoning step...'
+              )}
+              style={{ flex: 1, minWidth: 0, background: 'var(--bg)' }}
+            />
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!interruptionText.trim()}
+              onClick={handleSendInterruption}
+              style={{ flexShrink: 0 }}
+            >
+              <IconSend size={13} />
+              {t('发送指令', 'Send Directive')}
+            </button>
+          </div>
+        </div>
+      )}
+      {/* 7. Raw JSON Modal / Section */}
+      {showRawJson && (
+        <div className="card">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="card-title">
+              <IconCode size={16} />
+              {t('完整原始执行产物 (Raw Output JSON)', 'Complete Raw JSON Data')}
+            </div>
+          </div>
+          <div className="code-block" style={{ maxHeight: '320px' }}>
             {JSON.stringify(output, null, 2)}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

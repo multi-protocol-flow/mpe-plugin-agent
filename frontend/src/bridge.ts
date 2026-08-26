@@ -1,6 +1,8 @@
 import type {
+  HumanResponse,
   PluginIframeInitPayload,
   PluginIframeNodeSnapshot,
+  StreamMessagePayload,
 } from './types';
 import { setLocale } from './i18n';
 
@@ -8,6 +10,7 @@ export interface BridgeOptions {
   onInit?: (config: Record<string, unknown>, nodes?: PluginIframeNodeSnapshot[], initPayload?: PluginIframeInitPayload) => void;
   onConfigUpdated?: (config: unknown) => void;
   onExecutionUpdate?: (output: unknown) => void;
+  onStreamMessage?: (payload: StreamMessagePayload) => void;
 }
 
 interface PendingAction {
@@ -65,6 +68,14 @@ function requestAction(action: string, params: unknown): Promise<unknown> {
 
 export function uiCall(method: string, payload: unknown): Promise<unknown> {
   return requestAction('uiCall', { nodeType, method, payload });
+}
+
+export function submitHumanResponse(interactionId: string, response: HumanResponse): Promise<unknown> {
+  return uiCall('submit_human_response', { interaction_id: interactionId, response });
+}
+
+export function interruptAgent(executionId: string, text: string): Promise<unknown> {
+  return uiCall('interrupt_agent', { execution_id: executionId, text });
 }
 
 let configTimer: number | null = null;
@@ -143,6 +154,10 @@ export function initBridge(options: BridgeOptions): () => void {
       }
       case 'executionUpdate': {
         options.onExecutionUpdate?.(payload.output || payload.result || payload);
+        break;
+      }
+      case 'stream': {
+        options.onStreamMessage?.(payload as unknown as StreamMessagePayload);
         break;
       }
     }

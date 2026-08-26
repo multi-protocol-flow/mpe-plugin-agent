@@ -359,6 +359,8 @@ const DEFAULT_CONFIG: AgentReactConfig = {
   timeout_secs: 120,
   read_only_mode: false,
   stream: true,
+  enable_ask_human: true,
+  step_by_step: false,
 };
 
 function PanelApp() {
@@ -730,7 +732,7 @@ function PanelApp() {
                     color: 'var(--danger)',
                   }}
                 >
-                  {t('⚠️ 关联的服务商节点未填写 API Key，请在对应的 LLM Provider 节点中输入 API 密钥，或在下方输入临时密钥。', '⚠️ The linked Provider node has no API Key configured. Please configure API Key in the LLM Provider node or specify one below.')}
+                  {t('关联的服务商节点未填写 API Key，请在对应的 LLM Provider 节点中输入 API 密钥，或在下方输入临时密钥。', 'The linked Provider node has no API Key configured. Please configure API Key in the LLM Provider node or specify one below.')}
                 </div>
               )}
               <div className="col" style={{ marginTop: '2px' }}>
@@ -1325,6 +1327,19 @@ function PanelApp() {
                   )}
                 />
               </div>
+              {/* Tool HITL Confirmation Toggle */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', color: 'var(--fg)' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!tool.require_confirmation}
+                    onChange={(e) => handleUpdateTool(idx, { require_confirmation: e.target.checked })}
+                  />
+                  <span style={{ fontWeight: 500 }}>
+                    {t('敏感操作需人工二次审批 (HITL Confirmation)', 'Require Human Approval before Execution (HITL)')}
+                  </span>
+                </label>
+              </div>
 
               {/* Subflow Flow Path Configuration */}
               {(tool.tool_type === 'subflow' || tool.target_node_type === 'subflow') && (
@@ -1532,6 +1547,91 @@ function PanelApp() {
               {t(
                 '在工具派发执行前进行静态语法与意图审计：严格拦截写 SQL (INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE)、写 Redis 命令 (SET / DEL / HSET / FLUSHDB 等) 以及非幂等 HTTP 方法 (POST / PUT / DELETE / PATCH)。',
                 'Audits tool execution before dispatch: strictly blocks mutating SQL, Redis writes, and mutating HTTP methods.'
+              )}
+            </div>
+          </div>
+          {/* Row 6: Built-in ask_human Tool */}
+          <div
+            style={{
+              padding: '12px',
+              borderRadius: '6px',
+              background: config.enable_ask_human !== false ? 'var(--bg-subtle)' : 'var(--bg)',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '13px',
+                color: 'var(--fg)',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={config.enable_ask_human !== false}
+                onChange={(e) =>
+                  setConfig((prev) => ({ ...prev, enable_ask_human: e.target.checked }))
+                }
+              />
+              <IconBot size={16} style={{ color: config.enable_ask_human !== false ? 'var(--accent)' : 'var(--fg-muted)' }} />
+              <span>
+                {t('启用内置人机提问 (ask_human 工具)', 'Enable Built-in ask_human Tool')}
+              </span>
+            </label>
+            <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginLeft: '24px' }}>
+              {t(
+                '允许 Agent 在缺少必要参数、遇到歧义或需用户确认时主动调用 ask_human 提问，前端展开交互回复卡片，提交后恢复执行。',
+                'Allows Agent to autonomously invoke ask_human to request clarifications or missing input from the user.'
+              )}
+            </div>
+          </div>
+
+          {/* Row 7: Step-by-Step Debug Mode */}
+          <div
+            style={{
+              padding: '12px',
+              borderRadius: '6px',
+              background: config.step_by_step ? 'var(--bg-subtle)' : 'var(--bg)',
+              border: `1px solid ${config.step_by_step ? 'var(--accent)' : 'var(--border)'}`,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '13px',
+                color: 'var(--fg)',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={!!config.step_by_step}
+                onChange={(e) =>
+                  setConfig((prev) => ({ ...prev, step_by_step: e.target.checked }))
+                }
+              />
+              <IconClock size={16} style={{ color: config.step_by_step ? 'var(--accent)' : 'var(--fg-muted)' }} />
+              <span>
+                {t('开启单步调试模式 (Step-by-Step Debug)', 'Enable Step-by-Step Debug Mode')}
+              </span>
+            </label>
+            <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginLeft: '24px' }}>
+              {t(
+                '每一轮工具执行完成后自动暂停挂起，等待用户在时间线面板中点击【单步推进】或【执行到底】。',
+                'Pauses after every reasoning step for human inspection and manual step-by-step progression.'
               )}
             </div>
           </div>

@@ -38,6 +38,7 @@ export interface AgentToolDefinition {
   target_node_id?: string;
   fixed_config: Record<string, unknown>;
   dynamic_schema: Record<string, unknown>;
+  require_confirmation?: boolean;
 }
 
 export interface AgentReactConfig {
@@ -54,6 +55,8 @@ export interface AgentReactConfig {
   timeout_secs: number;
   read_only_mode: boolean;
   stream: boolean;
+  enable_ask_human?: boolean;
+  step_by_step?: boolean;
 }
 
 export interface TokenUsage {
@@ -76,14 +79,60 @@ export interface TimelineToolCall {
   duration_ms: number;
 }
 
+export interface PendingInteraction {
+  interaction_id: string;
+  execution_id: string;
+  interaction_type: 'ask_human' | 'confirmation' | 'step_pause' | string;
+  prompt: string;
+  tool_id?: string;
+  tool_name?: string;
+  input_args?: Record<string, unknown>;
+  step_index?: number;
+  created_at_ms: number;
+}
+
+export interface HumanResponse {
+  text?: string;
+  approved?: boolean;
+  reason?: string;
+  action?: 'next_step' | 'run_to_end' | 'cancel' | string;
+}
+
 export interface TimelineStep {
   step_index: number;
-  step_type: 'thought' | 'tool_call' | 'self_correction' | 'final_answer' | 'error' | string;
+  step_type: 'thought' | 'tool_call' | 'self_correction' | 'final_answer' | 'error' | 'waiting_human' | 'human_response' | 'interrupted' | 'step_pause' | string;
   thought?: string;
   tool_calls: TimelineToolCall[];
   duration_ms: number;
   self_correction: boolean;
   tokens?: TokenUsage;
+  human_interaction?: PendingInteraction;
+  human_response?: HumanResponse;
+}
+
+export interface StreamMessagePayload {
+  kind?: 'reasoning' | 'content';
+  delta_reasoning?: string;
+  delta_content?: string;
+  text?: string;
+  fullContent?: string;
+  fullReasoning?: string;
+  timestamp?: string;
+  type?: 'tool_start' | 'tool_end' | 'waiting_human' | 'human_resumed' | 'interrupted' | 'step_completed' | 'converged' | string;
+  interaction?: PendingInteraction;
+  interaction_id?: string;
+  response?: HumanResponse;
+  step?: TimelineStep;
+  tool_id?: string;
+  tool_name?: string;
+  input_args?: unknown;
+  success?: boolean;
+  output?: unknown;
+  error?: string;
+  duration_ms?: number;
+  final_answer?: string;
+  iterations?: number;
+  step_index?: number;
 }
 
 export interface AgentReactOutput {

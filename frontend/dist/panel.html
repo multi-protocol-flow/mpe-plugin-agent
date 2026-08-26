@@ -329,6 +329,59 @@ textarea {
   word-break: break-all;
   max-width: 100%;
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.98); }
+}
+
+.animate-pulse {
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.hitl-card {
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.hitl-card-ask {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+}
+
+.hitl-card-confirm {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-left: 4px solid var(--warn);
+}
+
+.hitl-card-pause {
+  background: var(--info-soft);
+  border: 1px solid var(--info);
+  border-left: 4px solid var(--info);
+}
+
+.hitl-card-interrupted {
+  background: var(--ok-soft);
+  border: 1px solid var(--ok);
+  border-left: 4px solid var(--ok);
+}
+
+.interruption-bar {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+}
 
 </style>
 </head>
@@ -7396,7 +7449,7 @@ function notifyConfig(config) {
 }
 function initBridge(options) {
   const handleMessage = (event) => {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const data = event.data;
     if (!data || typeof data !== "object" || typeof data.type !== "string") {
       return;
@@ -7447,6 +7500,10 @@ function initBridge(options) {
       }
       case "executionUpdate": {
         (_c = options.onExecutionUpdate) == null ? void 0 : _c.call(options, payload.output || payload.result || payload);
+        break;
+      }
+      case "stream": {
+        (_d = options.onStreamMessage) == null ? void 0 : _d.call(options, payload);
         break;
       }
     }
@@ -7872,7 +7929,9 @@ const DEFAULT_CONFIG = {
   temperature: 0.2,
   timeout_secs: 120,
   read_only_mode: false,
-  stream: true
+  stream: true,
+  enable_ask_human: true,
+  step_by_step: false
 };
 function PanelApp() {
   var _a, _b, _c, _d, _e, _f;
@@ -8208,7 +8267,7 @@ function PanelApp() {
                   background: "var(--danger-soft)",
                   color: "var(--danger)"
                 },
-                children: t("⚠️ 关联的服务商节点未填写 API Key，请在对应的 LLM Provider 节点中输入 API 密钥，或在下方输入临时密钥。", "⚠️ The linked Provider node has no API Key configured. Please configure API Key in the LLM Provider node or specify one below.")
+                children: t("关联的服务商节点未填写 API Key，请在对应的 LLM Provider 节点中输入 API 密钥，或在下方输入临时密钥。", "The linked Provider node has no API Key configured. Please configure API Key in the LLM Provider node or specify one below.")
               }
             ),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", style: { marginTop: "2px" }, children: [
@@ -8837,6 +8896,17 @@ function PanelApp() {
                   }
                 )
               ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginTop: "2px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer", color: "var(--fg)" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "checkbox",
+                    checked: !!tool.require_confirmation,
+                    onChange: (e) => handleUpdateTool(idx, { require_confirmation: e.target.checked })
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 500 }, children: t("敏感操作需人工二次审批 (HITL Confirmation)", "Require Human Approval before Execution (HITL)") })
+              ] }) }),
               (tool.tool_type === "subflow" || tool.target_node_type === "subflow") && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "4px" }, children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx(IconFolder, { size: 13 }),
@@ -9022,6 +9092,98 @@ function PanelApp() {
               /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginLeft: "24px" }, children: t(
                 "在工具派发执行前进行静态语法与意图审计：严格拦截写 SQL (INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE)、写 Redis 命令 (SET / DEL / HSET / FLUSHDB 等) 以及非幂等 HTTP 方法 (POST / PUT / DELETE / PATCH)。",
                 "Audits tool execution before dispatch: strictly blocks mutating SQL, Redis writes, and mutating HTTP methods."
+              ) })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: {
+              padding: "12px",
+              borderRadius: "6px",
+              background: config.enable_ask_human !== false ? "var(--bg-subtle)" : "var(--bg)",
+              border: "1px solid var(--border)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "6px"
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "label",
+                {
+                  style: {
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    color: "var(--fg)"
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "input",
+                      {
+                        type: "checkbox",
+                        checked: config.enable_ask_human !== false,
+                        onChange: (e) => setConfig((prev) => ({ ...prev, enable_ask_human: e.target.checked }))
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 16, style: { color: config.enable_ask_human !== false ? "var(--accent)" : "var(--fg-muted)" } }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("启用内置人机提问 (ask_human 工具)", "Enable Built-in ask_human Tool") })
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginLeft: "24px" }, children: t(
+                "允许 Agent 在缺少必要参数、遇到歧义或需用户确认时主动调用 ask_human 提问，前端展开交互回复卡片，提交后恢复执行。",
+                "Allows Agent to autonomously invoke ask_human to request clarifications or missing input from the user."
+              ) })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: {
+              padding: "12px",
+              borderRadius: "6px",
+              background: config.step_by_step ? "var(--bg-subtle)" : "var(--bg)",
+              border: `1px solid ${config.step_by_step ? "var(--accent)" : "var(--border)"}`,
+              display: "flex",
+              flexDirection: "column",
+              gap: "6px"
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "label",
+                {
+                  style: {
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    color: "var(--fg)"
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "input",
+                      {
+                        type: "checkbox",
+                        checked: !!config.step_by_step,
+                        onChange: (e) => setConfig((prev) => ({ ...prev, step_by_step: e.target.checked }))
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconClock, { size: 16, style: { color: config.step_by_step ? "var(--accent)" : "var(--fg-muted)" } }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("开启单步调试模式 (Step-by-Step Debug)", "Enable Step-by-Step Debug Mode") })
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginLeft: "24px" }, children: t(
+                "每一轮工具执行完成后自动暂停挂起，等待用户在时间线面板中点击【单步推进】或【执行到底】。",
+                "Pauses after every reasoning step for human inspection and manual step-by-step progression."
               ) })
             ]
           }
