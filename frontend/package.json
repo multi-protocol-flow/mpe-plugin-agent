@@ -1,7 +1,7 @@
 {
   "name": "mpe-agent-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Self-contained React frontend for Agent sidecar plugin (ReAct config panel + Thinking Timeline viewer)",
   "type": "commonjs",
   "scripts": {
