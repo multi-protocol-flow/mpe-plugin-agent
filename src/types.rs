@@ -626,7 +626,7 @@ pub fn audit_tool_call_safety(
     }
 
     // 3. HTTP method checks
-    if node_type.starts_with("http") {
+    if node_type.starts_with("http:request") {
         let method = config
             .get("method")
             .and_then(|v| v.as_str())
@@ -776,10 +776,10 @@ mod tests {
     #[test]
     fn test_audit_safety_http() {
         let config_ok = serde_json::json!({ "method": "GET" });
-        assert!(audit_tool_call_safety("http", &config_ok, true).is_ok());
+        assert!(audit_tool_call_safety("http:request", &config_ok, true).is_ok());
 
         let config_bad = serde_json::json!({ "method": "POST" });
-        assert!(audit_tool_call_safety("http", &config_bad, true).is_err());
+        assert!(audit_tool_call_safety("http:request", &config_bad, true).is_err());
     }
 
     #[test]

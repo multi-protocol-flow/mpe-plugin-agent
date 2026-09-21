@@ -250,10 +250,10 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
   },
   {
     id: 'http_request',
-    nameZh: 'HTTP 网络请求 (http)',
-    nameEn: 'HTTP Request (http)',
+    nameZh: 'HTTP 网络请求 (http:request)',
+    nameEn: 'HTTP Request (http:request)',
     category: 'api',
-    target_node_type: 'http',
+    target_node_type: 'http:request',
     icon: 'globe',
     descZh: '发送 HTTP/REST 请求以调用外部远程 API。',
     descEn: 'Send HTTP/REST request to invoke external remote APIs.',
@@ -575,7 +575,7 @@ function PanelApp() {
         },
         required: ['command', 'key'],
       };
-    } else if (node.type.startsWith('http')) {
+    } else if (node.type.startsWith('http:request')) {
       defaultSchema = {
         type: 'object',
         properties: {

@@ -141,7 +141,7 @@ pub async fn execute_tool_dispatch(
                 }
             }
         }
-        "http" | "http:request" => {
+        "http:request" | "http" => {
             let url = merged_config
                 .get("url")
                 .and_then(|s| s.as_str())
