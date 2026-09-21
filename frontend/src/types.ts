@@ -15,6 +15,8 @@ export interface PluginIframeInitPayload {
   host_api: Record<string, unknown>;
   nodeType: string;
   locale: string;
+  /** 宿主已解析主题；旧宿主不携带 → 回退 prefers-color-scheme */
+  theme?: 'light' | 'dark';
   nodes?: PluginIframeNodeSnapshot[];
   node_report?: Record<string, unknown>;
   outputData?: unknown;
