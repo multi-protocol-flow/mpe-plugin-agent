@@ -340,6 +340,177 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
     defaultFixedConfig: { flow_path: '' },
   },
 ];
+const DATASOURCE_PRESETS: Record<
+  string,
+  {
+    nameZh: string;
+    nameEn: string;
+    type: string;
+    defaultBaseUrl: string;
+    items: Array<{
+      id: string;
+      name: string;
+      method: string;
+      path: string;
+      summary: string;
+      raw: Record<string, unknown>;
+    }>;
+  }
+> = {
+  petstore_openapi: {
+    nameZh: 'Swagger Petstore (OpenAPI v3)',
+    nameEn: 'Swagger Petstore (OpenAPI v3)',
+    type: 'openapi',
+    defaultBaseUrl: 'https://petstore.swagger.io/v2',
+    items: [
+      {
+        id: 'get_pet_by_id',
+        name: 'Find pet by ID',
+        method: 'GET',
+        path: '/pet/{petId}',
+        summary: 'Returns a single pet by ID',
+        raw: {
+          path: '/pet/{petId}',
+          method: 'get',
+          operation_id: 'getPetById',
+          summary: 'Find pet by ID',
+          parameters: [
+            { name: 'petId', in: 'path', required: true, description: 'ID of pet to return', schema: { type: 'integer' } },
+          ],
+        },
+      },
+      {
+        id: 'add_new_pet',
+        name: 'Add a new pet',
+        method: 'POST',
+        path: '/pet',
+        summary: 'Add a new pet to the store inventory',
+        raw: {
+          path: '/pet',
+          method: 'post',
+          operation_id: 'addPet',
+          summary: 'Add a new pet to the store inventory',
+          request_body: {
+            required: true,
+            schema: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Pet name' },
+                status: { type: 'string', description: 'Pet status in the store', enum: ['available', 'pending', 'sold'] },
+              },
+              required: ['name'],
+            },
+          },
+        },
+      },
+      {
+        id: 'get_inventory',
+        name: 'Returns pet inventories by status',
+        method: 'GET',
+        path: '/store/inventory',
+        summary: 'Returns a map of status codes to quantities',
+        raw: {
+          path: '/store/inventory',
+          method: 'get',
+          operation_id: 'getInventory',
+          summary: 'Returns a map of status codes to quantities',
+          parameters: [],
+        },
+      },
+      {
+        id: 'delete_pet',
+        name: 'Deletes a pet',
+        method: 'DELETE',
+        path: '/pet/{petId}',
+        summary: 'Deletes a pet from inventory',
+        raw: {
+          path: '/pet/{petId}',
+          method: 'delete',
+          operation_id: 'deletePet',
+          summary: 'Deletes a pet from inventory',
+          parameters: [
+            { name: 'petId', in: 'path', required: true, description: 'Pet ID to delete', schema: { type: 'integer' } },
+          ],
+        },
+      },
+    ],
+  },
+  order_service_openapi: {
+    nameZh: '订单与支付系统 API (Order & Payment OpenAPI)',
+    nameEn: 'Order & Payment Service (OpenAPI v3)',
+    type: 'openapi',
+    defaultBaseUrl: 'https://api.orders.example.com',
+    items: [
+      {
+        id: 'get_order_by_id',
+        name: 'Query order details',
+        method: 'GET',
+        path: '/orders/{order_id}',
+        summary: 'Query detailed status and items for an order',
+        raw: {
+          path: '/orders/{order_id}',
+          method: 'get',
+          operation_id: 'getOrderDetails',
+          summary: 'Query detailed status and items for an order',
+          parameters: [
+            { name: 'order_id', in: 'path', required: true, description: 'Order tracking ID', schema: { type: 'string' } },
+          ],
+        },
+      },
+      {
+        id: 'create_order',
+        name: 'Create a new order',
+        method: 'POST',
+        path: '/orders',
+        summary: 'Submit a new purchase order',
+        raw: {
+          path: '/orders',
+          method: 'post',
+          operation_id: 'createOrder',
+          summary: 'Submit a new purchase order',
+          request_body: {
+            required: true,
+            schema: {
+              type: 'object',
+              properties: {
+                user_id: { type: 'string', description: 'Customer identifier' },
+                item_sku: { type: 'string', description: 'Product SKU code' },
+                quantity: { type: 'integer', description: 'Number of items' },
+              },
+              required: ['user_id', 'item_sku', 'quantity'],
+            },
+          },
+        },
+      },
+      {
+        id: 'charge_payment',
+        name: 'Charge payment gateway',
+        method: 'POST',
+        path: '/payments/charge',
+        summary: 'Process payment authorization and capture',
+        raw: {
+          path: '/payments/charge',
+          method: 'post',
+          operation_id: 'chargePayment',
+          summary: 'Process payment authorization and capture',
+          request_body: {
+            required: true,
+            schema: {
+              type: 'object',
+              properties: {
+                order_id: { type: 'string', description: 'Target order ID' },
+                amount: { type: 'number', description: 'Total charge amount' },
+                currency: { type: 'string', enum: ['USD', 'CNY', 'EUR'], description: 'ISO Currency code' },
+              },
+              required: ['order_id', 'amount'],
+            },
+          },
+        },
+      },
+    ],
+  },
+};
+
 
 const DEFAULT_CONFIG: AgentReactConfig = {
   provider_uuid: '',
@@ -368,19 +539,147 @@ function PanelApp() {
   const [availableNodes, setAvailableNodes] = useState<PluginIframeNodeSnapshot[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>('openai');
   const [showAddToolModal, setShowAddToolModal] = useState<boolean>(false);
-  const [activePaletteTab, setActivePaletteTab] = useState<'palette' | 'canvas'>('palette');
+  const [activePaletteTab, setActivePaletteTab] = useState<'palette' | 'canvas' | 'datasource'>('palette');
+  const [selectedDatasource, setSelectedDatasource] = useState<string>('petstore_openapi');
+  const [datasourceBaseUrl, setDatasourceBaseUrl] = useState<string>('https://petstore.swagger.io/v2');
+  const [datasourceEndpoints, setDatasourceEndpoints] = useState<
+    Array<{
+      id: string;
+      name: string;
+      method: string;
+      path: string;
+      summary: string;
+      selected: boolean;
+      raw: Record<string, unknown>;
+    }>
+  >(() => {
+    const preset = DATASOURCE_PRESETS['petstore_openapi'];
+    return preset ? preset.items.map((it) => ({ ...it, selected: true })) : [];
+  });
+  const [convertingDatasource, setConvertingDatasource] = useState<boolean>(false);
+  const [mountedSuccessMsg, setMountedSuccessMsg] = useState<string | null>(null);
+
+  const handleSelectDatasourcePreset = (key: string) => {
+    setSelectedDatasource(key);
+    const preset = DATASOURCE_PRESETS[key];
+    if (preset) {
+      setDatasourceBaseUrl(preset.defaultBaseUrl);
+      setDatasourceEndpoints(preset.items.map((it) => ({ ...it, selected: true })));
+    }
+  };
+
+  const handleToggleEndpoint = (index: number) => {
+    setDatasourceEndpoints((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], selected: !next[index].selected };
+      return next;
+    });
+  };
+
+  const handleToggleAllEndpoints = (selectAll: boolean) => {
+    setDatasourceEndpoints((prev) => prev.map((it) => ({ ...it, selected: selectAll })));
+  };
+
+  const handleMountDatasourceTools = async () => {
+    const selectedItems = datasourceEndpoints.filter((it) => it.selected);
+    if (selectedItems.length === 0) return;
+
+    setConvertingDatasource(true);
+    try {
+      const res = await uiCall<{ success: boolean; tools: AgentToolDefinition[]; count: number }>(
+        'convert_datasource_to_tools',
+        {
+          datasource_type: DATASOURCE_PRESETS[selectedDatasource]?.type || 'openapi',
+          base_url: datasourceBaseUrl,
+          items: selectedItems.map((it) => ({
+            id: it.id,
+            name: it.name,
+            method: it.method,
+            path: it.path,
+            summary: it.summary,
+            raw: it.raw,
+          })),
+        }
+      );
+
+      let toolsToAdd: AgentToolDefinition[] = [];
+      if (res && res.tools && Array.isArray(res.tools)) {
+        toolsToAdd = res.tools;
+      } else {
+        toolsToAdd = selectedItems.map((it) => {
+          const pathClean = it.path.trim().replace(/^\//, '').replace(/[\{\}\-\:\.\s]/g, '_').replace(/\//g, '_');
+          const slug = pathClean || 'root';
+          const toolId = `${it.method.toLowerCase()}_${slug}`;
+          return {
+            id: toolId,
+            name: (it.raw?.operation_id as string) || toolId,
+            description: it.summary || `${it.method} ${it.path}`,
+            tool_type: 'standalone_action',
+            target_node_type: 'http:request',
+            fixed_config: {
+              url: `${datasourceBaseUrl.replace(/\/+$/, '')}${it.path}`,
+              method: it.method.toLowerCase(),
+            },
+            dynamic_schema: {
+              type: 'object',
+              properties: {},
+              required: [],
+            },
+            require_confirmation: false,
+          };
+        });
+      }
+
+      setConfig((prev) => {
+        const existingIds = new Set(prev.tools.map((t) => t.id));
+        const filteredNew = toolsToAdd.filter((t) => !existingIds.has(t.id));
+        return {
+          ...prev,
+          tools: [...prev.tools, ...filteredNew],
+        };
+      });
+
+      setMountedSuccessMsg(
+        t(
+          `成功挂载 ${toolsToAdd.length} 个接口至工具库！`,
+          `Successfully mounted ${toolsToAdd.length} API tools!`
+        )
+      );
+      setTimeout(() => {
+        setMountedSuccessMsg(null);
+        setShowAddToolModal(false);
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to convert datasource tools:', err);
+    } finally {
+      setConvertingDatasource(false);
+    }
+  };
   const [modelsList, setModelsList] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState<boolean>(false);
+  const [flowVariables, setFlowVariables] = useState<Record<string, unknown>>({});
   const [testStatus, setTestStatus] = useState<{
     loading: boolean;
     success?: boolean;
     msg?: string;
   }>({ loading: false });
 
+  const resolveTemplateVariables = (str: string): string => {
+    if (!str) return '';
+    return str.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (match, key) => {
+      if (key in flowVariables && flowVariables[key] !== undefined && flowVariables[key] !== null) {
+        return String(flowVariables[key]);
+      }
+      return match;
+    });
+  };
   useEffect(() => {
     const unbind = initBridge({
-      onInit: (initialConfig, nodes) => {
+      onInit: (initialConfig, nodes, initPayload) => {
         if (nodes) setAvailableNodes(nodes);
+        if (initPayload && initPayload.variables) {
+          setFlowVariables(initPayload.variables);
+        }
         if (initialConfig && Object.keys(initialConfig).length > 0) {
           const cfg = initialConfig as Partial<AgentReactConfig>;
           const provUuid = cfg.provider_uuid || '';
@@ -481,7 +780,29 @@ function PanelApp() {
   };
 
   const handleTestConnection = async (targetProvider?: LlmProviderConfig) => {
-    const prov = targetProvider || effectiveProvider;
+    const rawProv = targetProvider || effectiveProvider;
+    const resolvedBaseUrl = resolveTemplateVariables(rawProv.base_url || '').trim();
+    const resolvedApiKey = resolveTemplateVariables(rawProv.api_key || '').trim();
+
+    if (resolvedBaseUrl.includes('{{')) {
+      const missingVar = resolvedBaseUrl.match(/\{\{\s*([^}]+)\s*\}\}/)?.[1] || '';
+      setTestStatus({
+        loading: false,
+        success: false,
+        msg: t(
+          `Base URL 包含未定义的环境变量 {{${missingVar}}}，请先在流程初始变量中配置该变量`,
+          `Base URL contains undefined variable {{${missingVar}}}; please define it in flow variables`
+        ),
+      });
+      return;
+    }
+
+    const prov: LlmProviderConfig = {
+      ...rawProv,
+      base_url: resolvedBaseUrl,
+      api_key: resolvedApiKey,
+    };
+
     setTestStatus({ loading: true });
     try {
       const res = (await uiCall('test_connection', {
@@ -512,7 +833,27 @@ function PanelApp() {
   };
 
   const handleFetchModels = async (targetProvider?: LlmProviderConfig) => {
-    const prov = targetProvider || effectiveProvider;
+    const rawProv = targetProvider || effectiveProvider;
+    const resolvedBaseUrl = resolveTemplateVariables(rawProv.base_url || '').trim();
+    const resolvedApiKey = resolveTemplateVariables(rawProv.api_key || '').trim();
+
+    if (resolvedBaseUrl.includes('{{')) {
+      const missingVar = resolvedBaseUrl.match(/\{\{\s*([^}]+)\s*\}\}/)?.[1] || '';
+      alert(
+        t(
+          `Base URL 包含未定义的环境变量 {{${missingVar}}}，请先在流程初始变量中配置该变量`,
+          `Base URL contains undefined variable {{${missingVar}}}; please define it in flow variables`
+        )
+      );
+      return;
+    }
+
+    const prov: LlmProviderConfig = {
+      ...rawProv,
+      base_url: resolvedBaseUrl,
+      api_key: resolvedApiKey,
+    };
+
     setLoadingModels(true);
     try {
       const res = (await uiCall('list_models', { provider: prov })) as {
@@ -1083,7 +1424,7 @@ function PanelApp() {
               <button
                 type="button"
                 className={`btn btn-sm ${activePaletteTab === 'palette' ? 'btn-primary' : ''}`}
-                style={{ flex: '1 1 auto', minWidth: '130px', justifyContent: 'center' }}
+                style={{ flex: '1 1 auto', minWidth: '120px', justifyContent: 'center' }}
                 onClick={() => setActivePaletteTab('palette')}
               >
                 <IconZap size={12} />
@@ -1091,8 +1432,17 @@ function PanelApp() {
               </button>
               <button
                 type="button"
+                className={`btn btn-sm ${activePaletteTab === 'datasource' ? 'btn-primary' : ''}`}
+                style={{ flex: '1 1 auto', minWidth: '120px', justifyContent: 'center' }}
+                onClick={() => setActivePaletteTab('datasource')}
+              >
+                <IconGlobe size={12} />
+                {t('挂载数据源 API (Datasource APIs)', 'Mount Datasource APIs')}
+              </button>
+              <button
+                type="button"
                 className={`btn btn-sm ${activePaletteTab === 'canvas' ? 'btn-primary' : ''}`}
-                style={{ flex: '1 1 auto', minWidth: '130px', justifyContent: 'center' }}
+                style={{ flex: '1 1 auto', minWidth: '120px', justifyContent: 'center' }}
                 onClick={() => setActivePaletteTab('canvas')}
               >
                 <IconLink size={12} />
@@ -1146,7 +1496,157 @@ function PanelApp() {
                   </div>
                 ))}
               </div>
-            ) : (
+            ) : activePaletteTab === 'datasource' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="row" style={{ gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div className="col" style={{ flex: '1 1 200px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 600 }}>
+                      {t('选择数据源规范 / 服务 (Datasource):', 'Select Datasource Spec:')}
+                    </label>
+                    <select
+                      value={selectedDatasource}
+                      onChange={(e) => handleSelectDatasourcePreset(e.target.value)}
+                      style={{ fontSize: '12px' }}
+                    >
+                      {Object.entries(DATASOURCE_PRESETS).map(([key, item]) => (
+                        <option key={key} value={key}>
+                          {t(item.nameZh, item.nameEn)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="col" style={{ flex: '2 1 240px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 600 }}>
+                      {t('服务基准 Base URL (支持 {{BASE_URL}} 变量):', 'Base URL (supports variables):')}
+                    </label>
+                    <input
+                      type="text"
+                      value={datasourceBaseUrl}
+                      onChange={(e) => setDatasourceBaseUrl(e.target.value)}
+                      placeholder="https://api.example.com"
+                      style={{ fontSize: '12px' }}
+                    />
+                  </div>
+                </div>
+
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--fg-muted)' }}>
+                    {t('待挂载 API 接口列表 (API Endpoints):', 'API Endpoints:')} ({datasourceEndpoints.filter((e) => e.selected).length}/{datasourceEndpoints.length})
+                  </div>
+                  <div className="row" style={{ gap: '6px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => handleToggleAllEndpoints(true)}
+                    >
+                      {t('全选', 'Select All')}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => handleToggleAllEndpoints(false)}
+                    >
+                      {t('取消全选', 'Unselect All')}
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    maxHeight: '200px',
+                    overflowY: 'auto',
+                    border: '1px solid var(--border)',
+                    borderRadius: '6px',
+                    padding: '4px',
+                    background: 'var(--bg-subtle)',
+                  }}
+                >
+                  {datasourceEndpoints.map((ep, epIdx) => (
+                    <div
+                      key={ep.id || epIdx}
+                      onClick={() => handleToggleEndpoint(epIdx)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        background: ep.selected ? 'var(--accent-soft)' : 'var(--bg)',
+                        border: ep.selected ? '1px solid var(--accent)' : '1px solid var(--border)',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={ep.selected}
+                        onChange={() => {}}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          flexShrink: 0,
+                          background:
+                            ep.method === 'GET'
+                              ? 'var(--ok-soft)'
+                              : ep.method === 'POST'
+                              ? 'var(--info-soft)'
+                              : ep.method === 'DELETE'
+                              ? 'var(--danger-soft)'
+                              : 'var(--accent-soft)',
+                          color:
+                            ep.method === 'GET'
+                              ? 'var(--ok)'
+                              : ep.method === 'POST'
+                              ? 'var(--info)'
+                              : ep.method === 'DELETE'
+                              ? 'var(--danger)'
+                              : 'var(--accent)',
+                          border: '1px solid currentColor',
+                        }}
+                      >
+                        {ep.method}
+                      </span>
+                      <strong style={{ flexShrink: 0, fontFamily: 'monospace' }}>{ep.path}</strong>
+                      <span style={{ color: 'var(--fg-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ep.summary || ep.name}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                  {mountedSuccessMsg ? (
+                    <span style={{ color: 'var(--ok)', fontWeight: 600, fontSize: '12px' }}>
+                      ✓ {mountedSuccessMsg}
+                    </span>
+                  ) : <span />}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={convertingDatasource || datasourceEndpoints.filter((e) => e.selected).length === 0}
+                    onClick={handleMountDatasourceTools}
+                    style={{ minWidth: '160px', justifyContent: 'center' }}
+                  >
+                    <IconGlobe size={13} />
+                    {convertingDatasource
+                      ? t('转换挂载中...', 'Mounting...')
+                      : t(
+                          `一键挂载已选 (${datasourceEndpoints.filter((e) => e.selected).length}) 至工具库`,
+                          `Mount Selected (${datasourceEndpoints.filter((e) => e.selected).length}) to Tools`
+                        )}
+                  </button>
+                </div>
+              </div>
+) : (
               <div
                 style={{
                   display: 'flex',
@@ -1591,6 +2091,20 @@ function PanelApp() {
                 'Allows Agent to autonomously invoke ask_human to request clarifications or missing input from the user.'
               )}
             </div>
+            {config.enable_ask_human !== false && (
+              <div style={{ marginLeft: '24px', marginTop: '6px' }}>
+                <label style={{ fontSize: '11px', color: 'var(--fg-muted)', display: 'block', marginBottom: '4px' }}>
+                  {t('单节点测试预设模拟回复 (避免 Test This Node 时等待超时):', 'Mock Response for Test Node (Avoids Timeout):')}
+                </label>
+                <input
+                  type="text"
+                  placeholder={t('例如：已确认，请使用默认参数继续执行', 'e.g. Confirmed, proceed with defaults')}
+                  value={config.mock_human_response || ''}
+                  onChange={(e) => setConfig((prev) => ({ ...prev, mock_human_response: e.target.value }))}
+                  style={{ fontSize: '12px' }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Row 7: Step-by-Step Debug Mode */}

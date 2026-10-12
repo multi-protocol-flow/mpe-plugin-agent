@@ -9,9 +9,13 @@ import {
   IconBrain,
   IconCheck,
   IconCheckCircle,
+  IconChevronDown,
   IconClock,
   IconCode,
   IconCopy,
+  IconDatabase,
+  IconFolder,
+  IconGlobe,
   IconHelpCircle,
   IconLayers,
   IconPause,
@@ -23,7 +27,6 @@ import {
   IconUser,
   IconWrench,
   IconX,
-  IconXCircle,
   IconZap,
 } from './icons';
 import './styles.css';
@@ -33,6 +36,62 @@ import type {
   StreamMessagePayload,
   TimelineStep,
 } from './types';
+function getNodeTypeBadge(nodeType: string) {
+  const norm = nodeType.toLowerCase();
+  if (norm.startsWith('http')) {
+    return {
+      label: nodeType,
+      color: '#3B82F6',
+      bg: 'rgba(59, 130, 246, 0.12)',
+      border: 'rgba(59, 130, 246, 0.3)',
+      icon: <IconGlobe size={11} />,
+    };
+  }
+  if (norm.startsWith('db') || norm.includes('sql') || norm.startsWith('mongo')) {
+    return {
+      label: nodeType,
+      color: '#10B981',
+      bg: 'rgba(16, 185, 129, 0.12)',
+      border: 'rgba(16, 185, 129, 0.3)',
+      icon: <IconDatabase size={11} />,
+    };
+  }
+  if (norm.startsWith('redis')) {
+    return {
+      label: nodeType,
+      color: '#EF4444',
+      bg: 'rgba(239, 68, 68, 0.12)',
+      border: 'rgba(239, 68, 68, 0.3)',
+      icon: <IconZap size={11} />,
+    };
+  }
+  if (norm === 'script') {
+    return {
+      label: nodeType,
+      color: '#F59E0B',
+      bg: 'rgba(245, 158, 11, 0.12)',
+      border: 'rgba(245, 158, 11, 0.3)',
+      icon: <IconCode size={11} />,
+    };
+  }
+  if (norm.startsWith('flow') || norm.includes('subflow')) {
+    return {
+      label: nodeType,
+      color: '#8B5CF6',
+      bg: 'rgba(139, 92, 246, 0.12)',
+      border: 'rgba(139, 92, 246, 0.3)',
+      icon: <IconFolder size={11} />,
+    };
+  }
+  return {
+    label: nodeType,
+    color: 'var(--accent)',
+    bg: 'var(--accent-soft)',
+    border: 'var(--accent-border)',
+    icon: <IconWrench size={11} />,
+  };
+}
+
 
 function ViewerApp() {
   const [output, setOutput] = useState<AgentReactOutput | null>(null);
@@ -45,6 +104,24 @@ function ViewerApp() {
     tool_name: string;
     input_args?: unknown;
   } | null>(null);
+  const [hasStartedExecution, setHasStartedExecution] = useState<boolean>(false);
+  const [completedLiveTools, setCompletedLiveTools] = useState<Array<{
+    tool_id: string;
+    tool_name: string;
+    success: boolean;
+    output?: unknown;
+    error?: string;
+    duration_ms: number;
+  }>>([]);
+  const [recentInteractions, setRecentInteractions] = useState<Array<{
+    interaction_id: string;
+    interaction_type: string;
+    prompt: string;
+    tool_name?: string;
+    user_response: string;
+    approved?: boolean;
+    timestamp: number;
+  }>>([]);
   const [humanInputText, setHumanInputText] = useState<string>('');
   const [rejectReasonText, setRejectReasonText] = useState<string>('');
   const [interruptionText, setInterruptionText] = useState<string>('');
@@ -53,6 +130,30 @@ function ViewerApp() {
   const [copiedAnswer, setCopiedAnswer] = useState(false);
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
+  const [collapsedThoughts, setCollapsedThoughts] = useState<Record<number, boolean>>({});
+  const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
+
+  const toggleThought = (idx: number) => {
+    setCollapsedThoughts((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
+  const toggleResult = (callId: string) => {
+    setExpandedResults((prev) => ({ ...prev, [callId]: !prev[callId] }));
+  };
+
+
+  const ensureDraftOutput = useCallback(() => {
+    setOutput((prev) => prev || {
+      success: false,
+      final_answer: '',
+      iterations: 1,
+      tool_call_count: 0,
+      self_corrections_count: 0,
+      token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      total_duration_ms: 0,
+      timeline: [],
+    });
+  }, []);
 
   useEffect(() => {
     const unbind = initBridge({
@@ -71,17 +172,22 @@ function ViewerApp() {
 
         if (candidate && typeof candidate === 'object' && Object.keys(candidate).length > 0) {
           setOutput(candidate as unknown as AgentReactOutput);
+          setHasStartedExecution(true);
         }
       },
       onExecutionUpdate: (data) => {
         if (data && typeof data === 'object') {
           setOutput(data as AgentReactOutput);
+          setHasStartedExecution(true);
           setLiveReasoning('');
           setLiveContent('');
           setExecutingTool(null);
         }
       },
       onStreamMessage: (msg: StreamMessagePayload) => {
+        setHasStartedExecution(true);
+        ensureDraftOutput();
+
         // 1. LLM Chunk Deltas
         if (msg.kind === 'reasoning' || typeof msg.delta_reasoning === 'string') {
           if (msg.fullReasoning) {
@@ -107,6 +213,17 @@ function ViewerApp() {
           });
         } else if (msg.type === 'tool_end') {
           setExecutingTool(null);
+          setCompletedLiveTools((prev) => [
+            ...prev,
+            {
+              tool_id: msg.tool_id || '',
+              tool_name: msg.tool_name || msg.tool_id || 'tool',
+              success: msg.success ?? true,
+              output: msg.output,
+              error: msg.error,
+              duration_ms: msg.duration_ms || 0,
+            },
+          ]);
         }
 
         // 3. Human in the Loop (HITL) Interruption / Interaction
@@ -118,9 +235,29 @@ function ViewerApp() {
           setHumanInputText('');
           setRejectReasonText('');
         } else if (msg.type === 'human_resumed') {
+          if (activeInteraction && msg.response) {
+            const respText =
+              msg.response.text ||
+              (msg.response.approved !== undefined
+                ? msg.response.approved
+                  ? t('已批准操作', 'Approved')
+                  : t('已拒绝操作', 'Rejected')
+                : t('已确认', 'Confirmed'));
+            setRecentInteractions((prev) => [
+              ...prev,
+              {
+                interaction_id: activeInteraction.interaction_id,
+                interaction_type: activeInteraction.interaction_type || 'ask_human',
+                prompt: activeInteraction.prompt,
+                tool_name: activeInteraction.tool_name,
+                user_response: respText,
+                approved: msg.response?.approved,
+                timestamp: Date.now(),
+              },
+            ]);
+          }
           setActiveInteraction(null);
         }
-
         // 3.5 Interrupted event
         if (msg.type === 'interrupted' && typeof msg.text === 'string') {
           const interruptedText = msg.text;
@@ -156,9 +293,12 @@ function ViewerApp() {
           });
         }
         if (msg.type === 'step_completed' && msg.step) {
+          const step = msg.step;
           setLiveReasoning('');
           setLiveContent('');
           setExecutingTool(null);
+          setCompletedLiveTools([]);
+          setRecentInteractions([]);
           setOutput((prev) => {
             const current = prev || {
               success: false,
@@ -176,9 +316,9 @@ function ViewerApp() {
             let nextTimeline: TimelineStep[];
             if (existingIdx >= 0) {
               nextTimeline = [...current.timeline];
-              nextTimeline[existingIdx] = msg.step;
+              nextTimeline[existingIdx] = step;
             } else {
-              nextTimeline = [...current.timeline, msg.step];
+              nextTimeline = [...current.timeline, step];
             }
             return {
               ...current,
@@ -194,6 +334,8 @@ function ViewerApp() {
           setLiveContent('');
           setExecutingTool(null);
           setActiveInteraction(null);
+          setCompletedLiveTools([]);
+          setRecentInteractions([]);
           if (msg.final_answer) {
             setOutput((prev) => ({
               ...(prev || {
@@ -260,11 +402,25 @@ function ViewerApp() {
 
   const handleSubmitAskHuman = useCallback(async () => {
     if (!activeInteraction) return;
+    const userText = humanInputText.trim() || 'Confirmed';
+    const curInteraction = activeInteraction;
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, {
-        text: humanInputText.trim() || 'Confirmed',
+      await submitHumanResponse(curInteraction.interaction_id, {
+        text: userText,
       });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || 'ask_human',
+          prompt: curInteraction.prompt,
+          tool_name: curInteraction.tool_name || 'ask_human',
+          user_response: userText,
+          timestamp: Date.now(),
+        },
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
       setHumanInputText('');
     } catch (err) {
@@ -272,29 +428,58 @@ function ViewerApp() {
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction, humanInputText]);
+  }, [activeInteraction, humanInputText, ensureDraftOutput]);
 
   const handleApproveTool = useCallback(async () => {
     if (!activeInteraction) return;
+    const curInteraction = activeInteraction;
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, { approved: true });
+      await submitHumanResponse(curInteraction.interaction_id, { approved: true });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || 'confirmation',
+          prompt: curInteraction.prompt,
+          tool_name: curInteraction.tool_name || 'tool',
+          user_response: t('已批准操作并继续执行', 'Approved tool execution'),
+          approved: true,
+          timestamp: Date.now(),
+        },
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
     } catch (err) {
       console.error('[agent viewer] approve tool failed:', err);
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction]);
+  }, [activeInteraction, ensureDraftOutput]);
 
   const handleRejectTool = useCallback(async () => {
     if (!activeInteraction) return;
+    const curInteraction = activeInteraction;
+    const reason = rejectReasonText.trim() || 'Rejected by human user';
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, {
+      await submitHumanResponse(curInteraction.interaction_id, {
         approved: false,
-        reason: rejectReasonText.trim() || 'Rejected by human user',
+        reason,
       });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || 'confirmation',
+          prompt: curInteraction.prompt,
+          tool_name: curInteraction.tool_name || 'tool',
+          user_response: `${t('已拒绝:', 'Rejected:')} ${reason}`,
+          approved: false,
+          timestamp: Date.now(),
+        },
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
       setRejectReasonText('');
     } catch (err) {
@@ -302,20 +487,32 @@ function ViewerApp() {
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction, rejectReasonText]);
+  }, [activeInteraction, rejectReasonText, ensureDraftOutput]);
 
   const handleStepDebugAction = useCallback(async (action: 'next_step' | 'run_to_end') => {
     if (!activeInteraction) return;
+    const curInteraction = activeInteraction;
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, { action });
+      await submitHumanResponse(curInteraction.interaction_id, { action });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || 'step_pause',
+          prompt: curInteraction.prompt,
+          user_response: action === 'next_step' ? t('单步推进下一轮', 'Next Step') : t('执行到底', 'Run to End'),
+          timestamp: Date.now(),
+        },
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
     } catch (err) {
       console.error('[agent viewer] step debug failed:', err);
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction]);
+  }, [activeInteraction, ensureDraftOutput]);
 
   const handleSendInterruption = useCallback(async () => {
     const text = interruptionText.trim();
@@ -357,7 +554,15 @@ function ViewerApp() {
     }
   }, [executionId, interruptionText]);
 
-  if (!output && !activeInteraction && !liveReasoning && !executingTool) {
+  if (
+    !output &&
+    !hasStartedExecution &&
+    !activeInteraction &&
+    !liveReasoning &&
+    !executingTool &&
+    recentInteractions.length === 0 &&
+    completedLiveTools.length === 0
+  ) {
     return (
       <div className="panel" style={{ textAlign: 'center', padding: '40px 20px' }}>
         <div style={{ color: 'var(--fg-soft)', fontSize: '13px' }}>
@@ -380,7 +585,12 @@ function ViewerApp() {
 
   const isFinished = Boolean(
     final_answer ||
-    (!liveReasoning && !executingTool && !activeInteraction && timeline.some((s) => s.step_type === 'final_answer' || s.step_type === 'error'))
+    (!liveReasoning &&
+      !executingTool &&
+      !activeInteraction &&
+      recentInteractions.length === 0 &&
+      completedLiveTools.length === 0 &&
+      timeline.some((s) => s.step_type === 'final_answer' || s.step_type === 'error'))
   );
 
   return (
@@ -635,9 +845,37 @@ function ViewerApp() {
           )}
         </div>
       )}
+      {/* 2.5 Recently Submitted Human Interaction Card */}
+      {recentInteractions.length > 0 && !activeInteraction && (
+        <div className="hitl-card hitl-card-confirm" style={{ borderLeft: '3px solid var(--ok)', background: 'var(--ok-soft)' }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="row" style={{ gap: '6px', fontWeight: 600, color: 'var(--ok)', fontSize: '13px' }}>
+              <IconCheckCircle size={16} />
+              <span>{t('人工协同决策已提交，Agent 正在继续推进...', 'Human Decision Submitted, Agent Resuming...')}</span>
+            </div>
+            <span className="badge badge-ok animate-pulse" style={{ fontSize: '11px' }}>
+              <IconClock size={11} />
+              {t('恢复执行中', 'Resumed')}
+            </span>
+          </div>
+          {recentInteractions.map((item, idx) => (
+            <div key={idx} style={{ marginTop: '8px', fontSize: '12px', background: 'var(--bg)', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+              <div style={{ color: 'var(--fg-muted)', fontSize: '11px', marginBottom: '2px' }}>
+                {t('提问 / 事项:', 'Prompt / Action:')}
+              </div>
+              <div style={{ fontWeight: 500, color: 'var(--fg)' }}>{item.prompt}</div>
+              <div style={{ color: 'var(--fg-muted)', fontSize: '11px', marginTop: '6px', marginBottom: '2px' }}>
+                {t('你的回复 / 决策:', 'Your Response / Decision:')}
+              </div>
+              <div style={{ fontWeight: 600, color: 'var(--accent-strong)' }}>{item.user_response}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
 
       {/* 3. Live Streaming Reasoning & Executing Tool Card */}
-      {(liveReasoning || liveContent || executingTool) && (
+      {(liveReasoning || liveContent || executingTool || completedLiveTools.length > 0) && (
         <div className="card" style={{ border: '1px dashed var(--accent)', background: 'var(--accent-soft)' }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div className="row" style={{ gap: '6px', color: 'var(--accent-strong)', fontWeight: 600 }}>
@@ -667,6 +905,50 @@ function ViewerApp() {
           {liveContent && (
             <div style={{ fontSize: '13px', color: 'var(--fg)', whiteSpace: 'pre-wrap', marginTop: '6px' }}>
               {liveContent}
+            </div>
+          )}
+
+          {completedLiveTools.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-strong)' }}>
+                {t('本轮已完成工具调用 (Completed Tool Invocations):', 'Completed Tool Invocations:')}
+              </div>
+              {completedLiveTools.map((tool, idx) => (
+                <div key={idx} className="tool-call-card" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <div className="row" style={{ gap: '6px' }}>
+                      <IconWrench size={13} style={{ color: tool.success ? 'var(--ok)' : 'var(--danger)' }} />
+                      <strong style={{ fontSize: '12px' }}>{tool.tool_name || tool.tool_id}</strong>
+                    </div>
+                    <div className="row" style={{ gap: '6px' }}>
+                      <span className={`badge ${tool.success ? 'badge-ok' : 'badge-danger'}`}>
+                        {tool.success ? <IconCheck size={10} /> : <IconX size={10} />}
+                        {tool.success ? t('执行成功', 'Success') : t('执行失败', 'Failed')}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--fg-soft)' }}>
+                        {tool.duration_ms}ms
+                      </span>
+                    </div>
+                  </div>
+                  {tool.output !== undefined && (
+                    <div style={{ marginTop: '6px' }}>
+                      <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
+                        {t('执行结果 (Output Data):', 'Output Data:')}
+                      </div>
+                      <div className="code-block" style={{ maxHeight: '160px', overflowY: 'auto' }}>
+                        {typeof tool.output === 'object' && tool.output !== null
+                          ? JSON.stringify(tool.output, null, 2)
+                          : String(tool.output)}
+                      </div>
+                    </div>
+                  )}
+                  {tool.error && (
+                    <div style={{ marginTop: '6px', color: 'var(--danger)', fontSize: '11px' }}>
+                      {tool.error}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -736,9 +1018,22 @@ function ViewerApp() {
                     </span>
                   )}
                   {step.self_correction && (
-                    <span className="badge badge-warn">
-                      <IconRotateCcw size={10} />
-                      {t('自我修复', 'Self-Correction')}
+                    <span
+                      className="badge badge-warn animate-pulse"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        background: 'rgba(245, 158, 11, 0.18)',
+                        color: '#D97706',
+                        border: '1px solid rgba(245, 158, 11, 0.5)',
+                        boxShadow: '0 0 6px rgba(245, 158, 11, 0.25)',
+                      }}
+                    >
+                      <IconRotateCcw size={11} />
+                      {t('自愈修复 (Self-Correction & Healed)', 'Self-Correction & Healed')}
                     </span>
                   )}
                   {step.step_type === 'final_answer' && (
@@ -775,13 +1070,43 @@ function ViewerApp() {
                       marginBottom: '4px',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '4px',
+                      justifyContent: 'space-between',
                     }}
                   >
-                    <IconBrain size={12} />
-                    {t('思维链 (Chain-of-Thought / Reasoning):', 'Reasoning / Thought:')}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <IconBrain size={12} />
+                      <span>{t('思维链 (Chain-of-Thought / Reasoning):', 'Reasoning / Thought:')}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      style={{
+                        padding: '1px 6px',
+                        fontSize: '10px',
+                        height: 'auto',
+                        background: 'transparent',
+                        borderColor: 'var(--border)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                      }}
+                      onClick={() => toggleThought(step.step_index || idx)}
+                    >
+                      <IconChevronDown
+                        size={11}
+                        style={{
+                          transform: collapsedThoughts[step.step_index || idx] ? 'rotate(-90deg)' : 'none',
+                          transition: 'transform 0.15s ease',
+                        }}
+                      />
+                      {collapsedThoughts[step.step_index || idx]
+                        ? t('展开思维链', 'Expand')
+                        : t('折叠思维链', 'Collapse')}
+                    </button>
                   </div>
-                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{step.thought}</div>
+                  {!collapsedThoughts[step.step_index || idx] && (
+                    <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{step.thought}</div>
+                  )}
                 </div>
               ) : null}
               {/* Tool Calls in this step */}
@@ -793,7 +1118,27 @@ function ViewerApp() {
                         <div className="row" style={{ gap: '6px' }}>
                           {tc.tool_name === 'ask_human' ? <IconBot size={14} /> : <IconWrench size={14} />}
                           <strong style={{ fontSize: '12px' }}>{tc.tool_name || tc.tool_id}</strong>
-                          <span className="badge badge-accent">{tc.node_type}</span>
+                          {(() => {
+                            const meta = getNodeTypeBadge(tc.node_type);
+                            return (
+                              <span
+                                className="badge"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  fontSize: '10px',
+                                  fontWeight: 600,
+                                  color: meta.color,
+                                  background: meta.bg,
+                                  border: `1px solid ${meta.border}`,
+                                }}
+                              >
+                                {meta.icon}
+                                {meta.label}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <span
                           className={`badge ${tc.success ? 'badge-ok' : 'badge-danger'}`}
@@ -851,7 +1196,7 @@ function ViewerApp() {
                           </div>
                         </div>
                       ) : (
-                        <>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                           {/* Arguments Payload */}
                           <div>
                             <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
@@ -864,36 +1209,128 @@ function ViewerApp() {
                             </div>
                           </div>
 
-                          {/* Output result or error */}
-                          {tc.output_data !== undefined && (
-                            <div>
-                              <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
-                                {t('执行输出 (Output):', 'Output Data:')}
-                              </div>
-                              <div className="code-block" style={{ maxHeight: '180px' }}>
-                                {typeof tc.output_data === 'object'
-                                  ? JSON.stringify(tc.output_data, null, 2)
-                                  : String(tc.output_data)}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {tc.error_message && (
-                        <div>
-                          <div style={{ fontSize: '11px', color: 'var(--danger)', marginBottom: '2px' }}>
-                            {t('错误详情 (Error):', 'Error Message:')}
-                          </div>
+                          {/* Result Drawer */}
                           <div
-                            className="code-block"
                             style={{
-                              borderColor: 'var(--danger)',
-                              color: 'var(--danger)',
-                              background: 'var(--danger-soft)',
+                              borderTop: '1px solid var(--border)',
+                              paddingTop: '6px',
+                              marginTop: '2px',
                             }}
                           >
-                            {tc.error_message}
+                            <div
+                              onClick={() => toggleResult(tc.call_id)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                cursor: 'pointer',
+                                padding: '4px 0',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  color: 'var(--fg)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                }}
+                              >
+                                <IconChevronDown
+                                  size={12}
+                                  style={{
+                                    transform: (expandedResults[tc.call_id] ?? !tc.success)
+                                      ? 'none'
+                                      : 'rotate(-90deg)',
+                                    transition: 'transform 0.15s ease',
+                                  }}
+                                />
+                                {t('执行结果抽屉 (Result Drawer)', 'Result Drawer')}
+                              </span>
+                              <span style={{ fontSize: '10px', color: 'var(--fg-soft)' }}>
+                                {(expandedResults[tc.call_id] ?? !tc.success)
+                                  ? t('点击收起', 'Collapse')
+                                  : t('点击展开查看宿主真实输出', 'Expand Result')}
+                              </span>
+                            </div>
+
+                            {(expandedResults[tc.call_id] ?? !tc.success) && (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '6px',
+                                  marginTop: '6px',
+                                }}
+                              >
+                                {tc.output_data !== undefined && (
+                                  <div>
+                                    <div
+                                      style={{
+                                        fontSize: '10px',
+                                        color: 'var(--fg-muted)',
+                                        marginBottom: '2px',
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {t('结构化输出 (Parsed JSON):', 'Structured Output:')}
+                                    </div>
+                                    <div className="code-block" style={{ maxHeight: '180px' }}>
+                                      {typeof tc.output_data === 'object'
+                                        ? JSON.stringify(tc.output_data, null, 2)
+                                        : String(tc.output_data)}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {tc.raw_response && (
+                                  <div>
+                                    <div
+                                      style={{
+                                        fontSize: '10px',
+                                        color: 'var(--fg-muted)',
+                                        marginBottom: '2px',
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {t('宿主原生返回 (Raw Response):', 'Raw Host Response:')}
+                                    </div>
+                                    <div
+                                      className="code-block"
+                                      style={{ maxHeight: '140px', background: 'var(--bg-subtle)' }}
+                                    >
+                                      {tc.raw_response}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {tc.error_message && (
+                                  <div>
+                                    <div
+                                      style={{
+                                        fontSize: '10px',
+                                        color: 'var(--danger)',
+                                        marginBottom: '2px',
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {t('错误详情 (Error Detail):', 'Error Detail:')}
+                                    </div>
+                                    <div
+                                      className="code-block"
+                                      style={{
+                                        borderColor: 'var(--danger)',
+                                        color: 'var(--danger)',
+                                        background: 'var(--danger-soft)',
+                                      }}
+                                    >
+                                      {tc.error_message}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
@@ -905,7 +1342,7 @@ function ViewerApp() {
           ))}
 
           {/* Active In-Progress Round inside Timeline */}
-          {(liveReasoning || liveContent || executingTool) && (
+          {(liveReasoning || liveContent || executingTool || recentInteractions.length > 0 || completedLiveTools.length > 0) && (
             <div className="timeline-item" style={{ borderLeftStyle: 'dashed', borderLeftColor: 'var(--accent)' }}>
               <div className="timeline-node ok animate-pulse" style={{ borderColor: 'var(--accent)', background: 'var(--accent-soft)' }}>
                 {timeline.length + 1}
@@ -918,10 +1355,88 @@ function ViewerApp() {
                   </span>
                   <span className="badge badge-accent animate-pulse">
                     <IconBrain size={12} />
-                    {executingTool ? t(`调用工具: ${executingTool.tool_name}`, `Tool: ${executingTool.tool_name}`) : t('大模型思考中', 'Thinking...')}
+                    {executingTool
+                      ? t(`调用工具: ${executingTool.tool_name}`, `Tool: ${executingTool.tool_name}`)
+                      : recentInteractions.length > 0
+                      ? t('人工决策已提交，推进中', 'Human Input Submitted, Resuming...')
+                      : completedLiveTools.length > 0
+                      ? t('工具执行完毕，继续推理', 'Tool Completed, Continuing...')
+                      : t('大模型思考中', 'Thinking...')}
                   </span>
                 </div>
               </div>
+
+              {/* Submitted Human Interaction inside Timeline */}
+              {recentInteractions.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+                  {recentInteractions.map((item, idx) => (
+                    <div key={idx} className="tool-call-card" style={{ border: '1px solid var(--ok)', background: 'var(--ok-soft)' }}>
+                      <div className="row" style={{ justifyContent: 'space-between' }}>
+                        <div className="row" style={{ gap: '6px' }}>
+                          <IconBot size={14} />
+                          <strong style={{ fontSize: '12px' }}>{item.tool_name || 'ask_human'}</strong>
+                        </div>
+                        <span className="badge badge-ok">
+                          <IconCheck size={10} />
+                          {t('已提交回复', 'Submitted')}
+                        </span>
+                      </div>
+                      <div style={{ marginTop: '6px', fontSize: '12px' }}>
+                        <div style={{ color: 'var(--fg-muted)', fontSize: '11px', marginBottom: '2px' }}>
+                          {t('提问内容:', 'Question:')}
+                        </div>
+                        <div style={{ fontWeight: 500, color: 'var(--fg)' }}>{item.prompt}</div>
+                        <div style={{ color: 'var(--fg-muted)', fontSize: '11px', marginTop: '6px', marginBottom: '2px' }}>
+                          {t('用户输入 / 决策:', 'User Response / Decision:')}
+                        </div>
+                        <div style={{ fontWeight: 600, color: 'var(--accent-strong)' }}>{item.user_response}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Completed Live Tools inside Timeline */}
+              {completedLiveTools.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+                  {completedLiveTools.map((tool, idx) => (
+                    <div key={idx} className="tool-call-card" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                      <div className="row" style={{ justifyContent: 'space-between' }}>
+                        <div className="row" style={{ gap: '6px' }}>
+                          <IconWrench size={13} style={{ color: tool.success ? 'var(--ok)' : 'var(--danger)' }} />
+                          <strong style={{ fontSize: '12px' }}>{tool.tool_name || tool.tool_id}</strong>
+                        </div>
+                        <div className="row" style={{ gap: '6px' }}>
+                          <span className={`badge ${tool.success ? 'badge-ok' : 'badge-danger'}`}>
+                            {tool.success ? <IconCheck size={10} /> : <IconX size={10} />}
+                            {tool.success ? t('执行成功', 'Success') : t('执行失败', 'Failed')}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'var(--fg-soft)' }}>
+                            {tool.duration_ms}ms
+                          </span>
+                        </div>
+                      </div>
+                      {tool.output !== undefined && (
+                        <div style={{ marginTop: '6px' }}>
+                          <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginBottom: '2px' }}>
+                            {t('执行结果 (Output Data):', 'Output Data:')}
+                          </div>
+                          <div className="code-block" style={{ maxHeight: '160px', overflowY: 'auto' }}>
+                            {typeof tool.output === 'object' && tool.output !== null
+                              ? JSON.stringify(tool.output, null, 2)
+                              : String(tool.output)}
+                          </div>
+                        </div>
+                      )}
+                      {tool.error && (
+                        <div style={{ marginTop: '6px', color: 'var(--danger)', fontSize: '11px' }}>
+                          {tool.error}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Streaming Thought / Reasoning */}
               {liveReasoning && (

@@ -154,10 +154,22 @@ pub struct AgentReactConfig {
     /// Step-by-step debug mode: pause after each tool execution for human stepping (default: false).
     #[serde(default)]
     pub step_by_step: bool,
+
+    /// Timeout for human-in-the-loop interactions (ask_human, confirmation, step pause) in seconds (default: 60).
+    #[serde(default = "default_interaction_timeout_secs")]
+    pub interaction_timeout_secs: u64,
+
+    /// Optional mock human response for non-interactive / single-node test mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mock_human_response: Option<String>,
 }
 
 fn default_system_prompt() -> String {
     "You are an autonomous ReAct agent. Reason step by step, call available tools when necessary, observe results, self-correct if errors occur, and provide a clear final answer when done.".to_string()
+}
+
+fn default_interaction_timeout_secs() -> u64 {
+    60
 }
 
 fn default_max_iterations() -> u32 {
@@ -198,6 +210,8 @@ impl Default for AgentReactConfig {
             stream: true,
             enable_ask_human: true,
             step_by_step: false,
+            interaction_timeout_secs: default_interaction_timeout_secs(),
+            mock_human_response: None,
         }
     }
 }
@@ -450,11 +464,24 @@ pub fn complete_interaction(interaction_id: &str, resp: HumanResponse) -> bool {
     false
 }
 
+/// Cancels an active interaction by removing it from the registry.
+pub fn cancel_interaction(interaction_id: &str) -> bool {
+    let registry = INTERACTION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = registry.lock() {
+        return map.remove(interaction_id).is_some();
+    }
+    false
+}
+
 /// Pushes an interruption/steering text message into the session queue.
 pub fn push_interruption(execution_id: &str, text: String) {
     let queues = INTERRUPTION_QUEUES.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut map) = queues.lock() {
-        let key = if execution_id.trim().is_empty() { "default" } else { execution_id.trim() };
+        let key = if execution_id.trim().is_empty() {
+            "default"
+        } else {
+            execution_id.trim()
+        };
         map.entry(key.to_string()).or_default().push(text);
     }
 }
@@ -486,10 +513,16 @@ pub fn drain_interruptions(execution_id: &str) -> Vec<String> {
 }
 /// Cleans up any leftover interactions or interruptions for an execution session.
 pub fn clear_execution_interactions(execution_id: &str) {
-    if let Ok(mut map) = INTERACTION_REGISTRY.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+    if let Ok(mut map) = INTERACTION_REGISTRY
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
         map.retain(|k, _| !k.contains(execution_id));
     }
-    if let Ok(mut map) = INTERRUPTION_QUEUES.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+    if let Ok(mut map) = INTERRUPTION_QUEUES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
         map.remove(execution_id);
     }
 }
@@ -502,7 +535,12 @@ pub fn tool_to_openai_function(tool: &AgentToolDefinition) -> serde_json::Value 
         tool.name.clone()
     };
 
-    let params = if tool.dynamic_schema.is_object() && !tool.dynamic_schema.as_object().is_none_or(serde_json::Map::is_empty) {
+    let params = if tool.dynamic_schema.is_object()
+        && !tool
+            .dynamic_schema
+            .as_object()
+            .is_none_or(serde_json::Map::is_empty)
+    {
         tool.dynamic_schema.clone()
     } else {
         serde_json::json!({
@@ -540,7 +578,9 @@ pub fn merge_tool_config(
             .and_then(|p| p.as_object())
             .map(|obj| obj.keys().map(|k| k.as_str()).collect());
 
-        let target_obj = merged.as_object_mut().ok_or("fixed_config is not an object")?;
+        let target_obj = merged
+            .as_object_mut()
+            .ok_or("fixed_config is not an object")?;
 
         for (k, v) in dyn_obj {
             if let Some(allowed) = &allowed_keys {
@@ -611,8 +651,8 @@ pub fn audit_tool_call_safety(
             .trim();
 
         let mutating_redis_cmds = [
-            "SET", "DEL", "HSET", "HDEL", "LPUSH", "RPUSH", "LPOP", "RPOP", "SADD", "SREM",
-            "ZADD", "ZREM", "FLUSHDB", "FLUSHALL", "EXPIRE", "PEXPIRE", "RENAME",
+            "SET", "DEL", "HSET", "HDEL", "LPUSH", "RPUSH", "LPOP", "RPOP", "SADD", "SREM", "ZADD",
+            "ZREM", "FLUSHDB", "FLUSHALL", "EXPIRE", "PEXPIRE", "RENAME",
         ];
 
         let upper_cmd = cmd.to_uppercase();
@@ -661,7 +701,9 @@ pub fn resolve_effective_provider(
             (*pooled).clone()
         } else if let Some(pooled) = pool.get::<LlmProviderConfig>(uuid) {
             (*pooled).clone()
-        } else if let Some(prov_val) = ctx_providers.and_then(|p| p.get(uuid).or_else(|| p.get(&key))) {
+        } else if let Some(prov_val) =
+            ctx_providers.and_then(|p| p.get(uuid).or_else(|| p.get(&key)))
+        {
             serde_json::from_value::<LlmProviderConfig>(prov_val.clone())
                 .map_err(|e| format!("Invalid provider data in execution context: {e}"))?
         } else if !inline_provider.base_url.trim().is_empty()
@@ -702,7 +744,6 @@ pub fn resolve_effective_provider(
 
     Ok(provider)
 }
-
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

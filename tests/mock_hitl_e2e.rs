@@ -148,7 +148,9 @@ async fn test_hitl_ask_human_flow() {
                 if let Some(params) = frame.get("params") {
                     if params.get("type").and_then(|t| t.as_str()) == Some("waiting_human") {
                         if let Some(interact) = params.get("interaction") {
-                            if let Some(id) = interact.get("interaction_id").and_then(|i| i.as_str()) {
+                            if let Some(id) =
+                                interact.get("interaction_id").and_then(|i| i.as_str())
+                            {
                                 interaction_id = id.to_string();
                                 break;
                             }
@@ -162,7 +164,10 @@ async fn test_hitl_ask_human_flow() {
         }
     }
 
-    assert!(!interaction_id.is_empty(), "Expected to receive waiting_human notification");
+    assert!(
+        !interaction_id.is_empty(),
+        "Expected to receive waiting_human notification"
+    );
 
     // Submit human response via uiCall
     let ui_resp_id = p.send_request(
@@ -304,8 +309,15 @@ async fn test_hitl_tool_confirmation_approval_flow() {
         if let Some(params) = frame.get("params") {
             if params.get("type").and_then(|t| t.as_str()) == Some("waiting_human") {
                 if let Some(interact) = params.get("interaction") {
-                    if interact.get("interaction_type").and_then(|t| t.as_str()) == Some("confirmation") {
-                        interaction_id = interact.get("interaction_id").unwrap().as_str().unwrap().to_string();
+                    if interact.get("interaction_type").and_then(|t| t.as_str())
+                        == Some("confirmation")
+                    {
+                        interaction_id = interact
+                            .get("interaction_id")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string();
                         break;
                     }
                 }
@@ -313,7 +325,10 @@ async fn test_hitl_tool_confirmation_approval_flow() {
         }
     }
 
-    assert!(!interaction_id.is_empty(), "Expected confirmation interaction");
+    assert!(
+        !interaction_id.is_empty(),
+        "Expected confirmation interaction"
+    );
 
     // Approve the tool execution
     p.send_request(
@@ -344,7 +359,10 @@ async fn test_hitl_tool_confirmation_approval_flow() {
     assert_eq!(result["success"], true);
 
     let report = &result["report_data"];
-    assert!(report["final_answer"].as_str().unwrap().contains("successfully deleted"));
+    assert!(report["final_answer"]
+        .as_str()
+        .unwrap()
+        .contains("successfully deleted"));
 
     p.shutdown();
 }
@@ -470,8 +488,15 @@ async fn test_hitl_tool_confirmation_rejection_flow() {
         if let Some(params) = frame.get("params") {
             if params.get("type").and_then(|t| t.as_str()) == Some("waiting_human") {
                 if let Some(interact) = params.get("interaction") {
-                    if interact.get("interaction_type").and_then(|t| t.as_str()) == Some("confirmation") {
-                        interaction_id = interact.get("interaction_id").unwrap().as_str().unwrap().to_string();
+                    if interact.get("interaction_type").and_then(|t| t.as_str())
+                        == Some("confirmation")
+                    {
+                        interaction_id = interact
+                            .get("interaction_id")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string();
                         break;
                     }
                 }
@@ -479,7 +504,10 @@ async fn test_hitl_tool_confirmation_rejection_flow() {
         }
     }
 
-    assert!(!interaction_id.is_empty(), "Expected confirmation interaction");
+    assert!(
+        !interaction_id.is_empty(),
+        "Expected confirmation interaction"
+    );
 
     // Reject the tool execution with a reason
     p.send_request(
@@ -511,7 +539,10 @@ async fn test_hitl_tool_confirmation_rejection_flow() {
     assert_eq!(result["success"], true);
 
     let report = &result["report_data"];
-    assert!(report["final_answer"].as_str().unwrap().contains("human rejected"));
+    assert!(report["final_answer"]
+        .as_str()
+        .unwrap()
+        .contains("human rejected"));
     assert_eq!(report["self_corrections_count"], 1);
 
     p.shutdown();
@@ -611,8 +642,15 @@ async fn test_hitl_step_by_step_debug_flow() {
         if let Some(params) = frame.get("params") {
             if params.get("type").and_then(|t| t.as_str()) == Some("waiting_human") {
                 if let Some(interact) = params.get("interaction") {
-                    if interact.get("interaction_type").and_then(|t| t.as_str()) == Some("step_pause") {
-                        interaction_id = interact.get("interaction_id").unwrap().as_str().unwrap().to_string();
+                    if interact.get("interaction_type").and_then(|t| t.as_str())
+                        == Some("step_pause")
+                    {
+                        interaction_id = interact
+                            .get("interaction_id")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string();
                         break;
                     }
                 }
@@ -620,7 +658,10 @@ async fn test_hitl_step_by_step_debug_flow() {
         }
     }
 
-    assert!(!interaction_id.is_empty(), "Expected step_pause interaction");
+    assert!(
+        !interaction_id.is_empty(),
+        "Expected step_pause interaction"
+    );
 
     // Advance to next step / run to end
     p.send_request(
@@ -649,6 +690,97 @@ async fn test_hitl_step_by_step_debug_flow() {
     let frame = final_result.expect("execute completed");
     let result = frame.get("result").expect("result object");
     assert_eq!(result["success"], true);
+
+    p.shutdown();
+}
+#[tokio::test]
+async fn test_hitl_interaction_timeout_fallback() {
+    let server = MockServer::start().await;
+
+    // Round 1: Model invokes `ask_human`
+    let r1_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Need human input.\",\"tool_calls\":[{\"index\":0,\"id\":\"call_ask_1\",\"type\":\"function\",\"function\":{\"name\":\"ask_human\",\"arguments\":\"{\\\"question\\\": \\\"Confirm proceed?\\\"}\"}}]}}]}\n\n\
+data: [DONE]\n\n";
+
+    // Round 2: After timeout fallback text is fed to model, model converges
+    let r2_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Timed out, finishing autonomously.\",\"content\":\"Proceeded autonomously after timeout.\"}}]}\n\n\
+data: [DONE]\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r1_sse),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r2_sse),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    let mut p = PluginProcess::spawn();
+
+    // Start execution with 1s interaction timeout
+    p.send_request(
+        "execute",
+        json!({
+            "execution_id": "exec_timeout_test_01",
+            "config": {
+                "type": "agent:react",
+                "provider": {
+                    "base_url": server.uri(),
+                    "api_key": "test-key",
+                    "model": "gpt-4o"
+                },
+                "user_prompt": "Ask human then proceed",
+                "enable_ask_human": true,
+                "interaction_timeout_secs": 1,
+                "timeout_secs": 10
+            }
+        }),
+    );
+
+    let mut received_timeout_event = false;
+    let mut final_result = None;
+
+    // Do NOT submit any human response, let it time out after 1s
+    for _ in 0..60 {
+        let frame = p.read_next_frame();
+        if let Some(params) = frame.get("params") {
+            if params.get("type").and_then(|t| t.as_str()) == Some("human_timeout") {
+                received_timeout_event = true;
+            }
+        }
+        if frame.get("id").and_then(|i| i.as_u64()) == Some(1) {
+            final_result = Some(frame);
+            break;
+        }
+    }
+
+    assert!(
+        received_timeout_event,
+        "Expected to receive human_timeout stream event"
+    );
+    let frame = final_result.expect("execute should complete after timeout");
+    let result = frame.get("result").expect("result object");
+    assert_eq!(result["success"], true);
+
+    let output = result.get("output_data").expect("output_data");
+    assert!(output["final_answer"]
+        .as_str()
+        .unwrap()
+        .contains("Proceeded autonomously"));
 
     p.shutdown();
 }

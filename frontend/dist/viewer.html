@@ -12,7 +12,7 @@
 :root {
   /* 明暗模式由宿主下发的 data-theme 决定（docs/plugin-frontend-theme.md）；
      color-scheme 让 UA 原生控件（下拉列表/checkbox/滚动条）跟随 */
-  color-scheme: light;
+  color-scheme: light dark;
   --bg: #ffffff;
   --bg-subtle: #f8fafc;
   --bg-muted: #f1f5f9;
@@ -196,6 +196,60 @@ textarea {
   transition: border-color 0.15s ease;
 }
 
+/* Custom styled Checkbox matching Agent purple theme (#8B5CF6) */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--bg-input);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  margin: 0;
+  vertical-align: middle;
+  flex-shrink: 0;
+  position: relative;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+  background-color: var(--bg-subtle);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type="checkbox"]:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px rgba(139, 92, 246, 0.3);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #ffffff;
+  border-bottom: 2px solid #ffffff;
+  transform: rotate(-45deg) translate(0.5px, -0.5px);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--border);
+  background-color: var(--bg-muted);
+}
+
 /*
  * 原生 select 的外观（箭头、内阴影）由 UA 绘制、不跟随主题 —— 深色底上默认箭头
  * 会看不见或控件保留浅色原生外观。去掉原生外观，用两段渐变自绘下箭头，
@@ -205,6 +259,9 @@ select {
   -webkit-appearance: none;
   appearance: none;
   padding-right: 26px;
+  background-color: var(--bg-input);
+  color: var(--fg);
+  color-scheme: light dark;
   background-image:
     linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
     linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
@@ -214,6 +271,18 @@ select {
   background-size: 5px 5px;
   background-repeat: no-repeat;
   cursor: pointer;
+}
+
+:root[data-theme="dark"] select {
+  color-scheme: dark;
+  background-color: #1e293b;
+  color: #f8fafc;
+}
+
+:root[data-theme="light"] select {
+  color-scheme: light;
+  background-color: #ffffff;
+  color: #0f172a;
 }
 
 input[type="text"]:focus,
@@ -229,11 +298,37 @@ textarea {
   resize: vertical;
 }
 
-/* 原生下拉的选项列表由 UA 绘制：显式给出配色。否则深色模式下 UA 按浅色画
-   白底、文字却继承近白色的 --fg → 「白底白字」。 */
+/* 原生下拉的选项列表：强制给出自洽的前景与背景色，防止 WebKitGTK / 原生控件出现白底白字 */
+select option,
 option {
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   color: var(--fg);
+}
+
+@media (prefers-color-scheme: dark) {
+  select,
+  select option,
+  option {
+    color-scheme: dark;
+    background-color: #1e293b;
+    color: #f8fafc;
+  }
+}
+
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] select option,
+:root[data-theme="dark"] option {
+  color-scheme: dark;
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+:root[data-theme="light"] select,
+:root[data-theme="light"] select option,
+:root[data-theme="light"] option {
+  color-scheme: light;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
 }
 
 .btn {
@@ -7469,6 +7564,10 @@ function applyTheme(theme) {
   root2.dataset.theme = theme;
   root2.style.colorScheme = theme;
 }
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(isDark ? "dark" : "light");
+}
 function isTheme(value) {
   return value === "light" || value === "dark";
 }
@@ -7696,6 +7795,16 @@ const IconCopy = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" })
   ] })
 );
+const IconGlobe = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "12", r: "10" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: "2", y1: "12", x2: "22", y2: "12" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" })
+  ] })
+);
+const IconChevronDown = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "6 9 12 15 18 9" }) })
+);
 const IconActivity = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "22 12 18 12 15 21 9 3 6 12 2 12" }) })
 );
@@ -7717,11 +7826,21 @@ const IconRotateCcw = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 3v5h5" })
   ] })
 );
+const IconDatabase = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("ellipse", { cx: "12", cy: "5", rx: "9", ry: "3" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" })
+  ] })
+);
 const IconCode = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "16 18 22 12 16 6" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("polyline", { points: "8 6 2 12 8 18" })
   ] })
+);
+const IconFolder = icon(
+  /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" }) })
 );
 const IconSend = icon(
   /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -7751,6 +7870,61 @@ const IconUser = icon(
     /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "7", r: "4" })
   ] })
 );
+function getNodeTypeBadge(nodeType2) {
+  const norm = nodeType2.toLowerCase();
+  if (norm.startsWith("http")) {
+    return {
+      label: nodeType2,
+      color: "#3B82F6",
+      bg: "rgba(59, 130, 246, 0.12)",
+      border: "rgba(59, 130, 246, 0.3)",
+      icon: /* @__PURE__ */ jsxRuntimeExports.jsx(IconGlobe, { size: 11 })
+    };
+  }
+  if (norm.startsWith("db") || norm.includes("sql") || norm.startsWith("mongo")) {
+    return {
+      label: nodeType2,
+      color: "#10B981",
+      bg: "rgba(16, 185, 129, 0.12)",
+      border: "rgba(16, 185, 129, 0.3)",
+      icon: /* @__PURE__ */ jsxRuntimeExports.jsx(IconDatabase, { size: 11 })
+    };
+  }
+  if (norm.startsWith("redis")) {
+    return {
+      label: nodeType2,
+      color: "#EF4444",
+      bg: "rgba(239, 68, 68, 0.12)",
+      border: "rgba(239, 68, 68, 0.3)",
+      icon: /* @__PURE__ */ jsxRuntimeExports.jsx(IconZap, { size: 11 })
+    };
+  }
+  if (norm === "script") {
+    return {
+      label: nodeType2,
+      color: "#F59E0B",
+      bg: "rgba(245, 158, 11, 0.12)",
+      border: "rgba(245, 158, 11, 0.3)",
+      icon: /* @__PURE__ */ jsxRuntimeExports.jsx(IconCode, { size: 11 })
+    };
+  }
+  if (norm.startsWith("flow") || norm.includes("subflow")) {
+    return {
+      label: nodeType2,
+      color: "#8B5CF6",
+      bg: "rgba(139, 92, 246, 0.12)",
+      border: "rgba(139, 92, 246, 0.3)",
+      icon: /* @__PURE__ */ jsxRuntimeExports.jsx(IconFolder, { size: 11 })
+    };
+  }
+  return {
+    label: nodeType2,
+    color: "var(--accent)",
+    bg: "var(--accent-soft)",
+    border: "var(--accent-border)",
+    icon: /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 11 })
+  };
+}
 function ViewerApp() {
   var _a;
   const [output, setOutput] = reactExports.useState(null);
@@ -7759,6 +7933,9 @@ function ViewerApp() {
   const [liveReasoning, setLiveReasoning] = reactExports.useState("");
   const [liveContent, setLiveContent] = reactExports.useState("");
   const [executingTool, setExecutingTool] = reactExports.useState(null);
+  const [hasStartedExecution, setHasStartedExecution] = reactExports.useState(false);
+  const [completedLiveTools, setCompletedLiveTools] = reactExports.useState([]);
+  const [recentInteractions, setRecentInteractions] = reactExports.useState([]);
   const [humanInputText, setHumanInputText] = reactExports.useState("");
   const [rejectReasonText, setRejectReasonText] = reactExports.useState("");
   const [interruptionText, setInterruptionText] = reactExports.useState("");
@@ -7767,6 +7944,26 @@ function ViewerApp() {
   const [copiedAnswer, setCopiedAnswer] = reactExports.useState(false);
   const [copiedRaw, setCopiedRaw] = reactExports.useState(false);
   const [showRawJson, setShowRawJson] = reactExports.useState(false);
+  const [collapsedThoughts, setCollapsedThoughts] = reactExports.useState({});
+  const [expandedResults, setExpandedResults] = reactExports.useState({});
+  const toggleThought = (idx) => {
+    setCollapsedThoughts((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
+  const toggleResult = (callId) => {
+    setExpandedResults((prev) => ({ ...prev, [callId]: !prev[callId] }));
+  };
+  const ensureDraftOutput = reactExports.useCallback(() => {
+    setOutput((prev) => prev || {
+      success: false,
+      final_answer: "",
+      iterations: 1,
+      tool_call_count: 0,
+      self_corrections_count: 0,
+      token_usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      total_duration_ms: 0,
+      timeline: []
+    });
+  }, []);
   reactExports.useEffect(() => {
     const unbind = initBridge({
       onInit: (config, _nodes, initPayload) => {
@@ -7777,17 +7974,21 @@ function ViewerApp() {
         const candidate = (payload == null ? void 0 : payload.reportData) || (payload == null ? void 0 : payload.outputData) || (nodeReport == null ? void 0 : nodeReport.plugin_data) || (nodeReport == null ? void 0 : nodeReport.output_data) || config;
         if (candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) {
           setOutput(candidate);
+          setHasStartedExecution(true);
         }
       },
       onExecutionUpdate: (data) => {
         if (data && typeof data === "object") {
           setOutput(data);
+          setHasStartedExecution(true);
           setLiveReasoning("");
           setLiveContent("");
           setExecutingTool(null);
         }
       },
       onStreamMessage: (msg) => {
+        setHasStartedExecution(true);
+        ensureDraftOutput();
         if (msg.kind === "reasoning" || typeof msg.delta_reasoning === "string") {
           if (msg.fullReasoning) {
             setLiveReasoning(msg.fullReasoning);
@@ -7810,6 +8011,20 @@ function ViewerApp() {
           });
         } else if (msg.type === "tool_end") {
           setExecutingTool(null);
+          setCompletedLiveTools((prev) => {
+            var _a2;
+            return [
+              ...prev,
+              {
+                tool_id: msg.tool_id || "",
+                tool_name: msg.tool_name || msg.tool_id || "tool",
+                success: (_a2 = msg.success) != null ? _a2 : true,
+                output: msg.output,
+                error: msg.error,
+                duration_ms: msg.duration_ms || 0
+              }
+            ];
+          });
         }
         if (msg.type === "waiting_human" && msg.interaction) {
           setActiveInteraction(msg.interaction);
@@ -7819,6 +8034,24 @@ function ViewerApp() {
           setHumanInputText("");
           setRejectReasonText("");
         } else if (msg.type === "human_resumed") {
+          if (activeInteraction && msg.response) {
+            const respText = msg.response.text || (msg.response.approved !== void 0 ? msg.response.approved ? t("已批准操作", "Approved") : t("已拒绝操作", "Rejected") : t("已确认", "Confirmed"));
+            setRecentInteractions((prev) => {
+              var _a2;
+              return [
+                ...prev,
+                {
+                  interaction_id: activeInteraction.interaction_id,
+                  interaction_type: activeInteraction.interaction_type || "ask_human",
+                  prompt: activeInteraction.prompt,
+                  tool_name: activeInteraction.tool_name,
+                  user_response: respText,
+                  approved: (_a2 = msg.response) == null ? void 0 : _a2.approved,
+                  timestamp: Date.now()
+                }
+              ];
+            });
+          }
           setActiveInteraction(null);
         }
         if (msg.type === "interrupted" && typeof msg.text === "string") {
@@ -7855,9 +8088,12 @@ function ViewerApp() {
           });
         }
         if (msg.type === "step_completed" && msg.step) {
+          const step = msg.step;
           setLiveReasoning("");
           setLiveContent("");
           setExecutingTool(null);
+          setCompletedLiveTools([]);
+          setRecentInteractions([]);
           setOutput((prev) => {
             const current = prev || {
               success: false,
@@ -7878,9 +8114,9 @@ function ViewerApp() {
             let nextTimeline;
             if (existingIdx >= 0) {
               nextTimeline = [...current.timeline];
-              nextTimeline[existingIdx] = msg.step;
+              nextTimeline[existingIdx] = step;
             } else {
-              nextTimeline = [...current.timeline, msg.step];
+              nextTimeline = [...current.timeline, step];
             }
             return {
               ...current,
@@ -7894,6 +8130,8 @@ function ViewerApp() {
           setLiveContent("");
           setExecutingTool(null);
           setActiveInteraction(null);
+          setCompletedLiveTools([]);
+          setRecentInteractions([]);
           if (msg.final_answer) {
             setOutput((prev) => ({
               ...prev || {
@@ -7954,11 +8192,25 @@ function ViewerApp() {
   };
   const handleSubmitAskHuman = reactExports.useCallback(async () => {
     if (!activeInteraction) return;
+    const userText = humanInputText.trim() || "Confirmed";
+    const curInteraction = activeInteraction;
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, {
-        text: humanInputText.trim() || "Confirmed"
+      await submitHumanResponse(curInteraction.interaction_id, {
+        text: userText
       });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || "ask_human",
+          prompt: curInteraction.prompt,
+          tool_name: curInteraction.tool_name || "ask_human",
+          user_response: userText,
+          timestamp: Date.now()
+        }
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
       setHumanInputText("");
     } catch (err) {
@@ -7966,27 +8218,56 @@ function ViewerApp() {
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction, humanInputText]);
+  }, [activeInteraction, humanInputText, ensureDraftOutput]);
   const handleApproveTool = reactExports.useCallback(async () => {
     if (!activeInteraction) return;
+    const curInteraction = activeInteraction;
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, { approved: true });
+      await submitHumanResponse(curInteraction.interaction_id, { approved: true });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || "confirmation",
+          prompt: curInteraction.prompt,
+          tool_name: curInteraction.tool_name || "tool",
+          user_response: t("已批准操作并继续执行", "Approved tool execution"),
+          approved: true,
+          timestamp: Date.now()
+        }
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
     } catch (err) {
       console.error("[agent viewer] approve tool failed:", err);
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction]);
+  }, [activeInteraction, ensureDraftOutput]);
   const handleRejectTool = reactExports.useCallback(async () => {
     if (!activeInteraction) return;
+    const curInteraction = activeInteraction;
+    const reason = rejectReasonText.trim() || "Rejected by human user";
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, {
+      await submitHumanResponse(curInteraction.interaction_id, {
         approved: false,
-        reason: rejectReasonText.trim() || "Rejected by human user"
+        reason
       });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || "confirmation",
+          prompt: curInteraction.prompt,
+          tool_name: curInteraction.tool_name || "tool",
+          user_response: `${t("已拒绝:", "Rejected:")} ${reason}`,
+          approved: false,
+          timestamp: Date.now()
+        }
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
       setRejectReasonText("");
     } catch (err) {
@@ -7994,19 +8275,31 @@ function ViewerApp() {
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction, rejectReasonText]);
+  }, [activeInteraction, rejectReasonText, ensureDraftOutput]);
   const handleStepDebugAction = reactExports.useCallback(async (action) => {
     if (!activeInteraction) return;
+    const curInteraction = activeInteraction;
     setSubmittingInteraction(true);
     try {
-      await submitHumanResponse(activeInteraction.interaction_id, { action });
+      await submitHumanResponse(curInteraction.interaction_id, { action });
+      setRecentInteractions((prev) => [
+        ...prev,
+        {
+          interaction_id: curInteraction.interaction_id,
+          interaction_type: curInteraction.interaction_type || "step_pause",
+          prompt: curInteraction.prompt,
+          user_response: action === "next_step" ? t("单步推进下一轮", "Next Step") : t("执行到底", "Run to End"),
+          timestamp: Date.now()
+        }
+      ]);
+      ensureDraftOutput();
       setActiveInteraction(null);
     } catch (err) {
       console.error("[agent viewer] step debug failed:", err);
     } finally {
       setSubmittingInteraction(false);
     }
-  }, [activeInteraction]);
+  }, [activeInteraction, ensureDraftOutput]);
   const handleSendInterruption = reactExports.useCallback(async () => {
     const text = interruptionText.trim();
     if (!text) return;
@@ -8046,7 +8339,7 @@ function ViewerApp() {
       console.error("[agent viewer] send interruption failed:", err);
     }
   }, [executionId, interruptionText]);
-  if (!output && !activeInteraction && !liveReasoning && !executingTool) {
+  if (!output && !hasStartedExecution && !activeInteraction && !liveReasoning && !executingTool && recentInteractions.length === 0 && completedLiveTools.length === 0) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel", style: { textAlign: "center", padding: "40px 20px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--fg-soft)", fontSize: "13px" }, children: t("等待 Agent 执行产物或加载中...", "Waiting for Agent execution output...") }) });
   }
   const {
@@ -8060,7 +8353,7 @@ function ViewerApp() {
     timeline = []
   } = output || {};
   const isFinished = Boolean(
-    final_answer || !liveReasoning && !executingTool && !activeInteraction && timeline.some((s) => s.step_type === "final_answer" || s.step_type === "error")
+    final_answer || !liveReasoning && !executingTool && !activeInteraction && recentInteractions.length === 0 && completedLiveTools.length === 0 && timeline.some((s) => s.step_type === "final_answer" || s.step_type === "error")
   );
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "panel", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", children: [
@@ -8301,7 +8594,25 @@ function ViewerApp() {
         ]
       }
     ),
-    (liveReasoning || liveContent || executingTool) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", style: { border: "1px dashed var(--accent)", background: "var(--accent-soft)" }, children: [
+    recentInteractions.length > 0 && !activeInteraction && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "hitl-card hitl-card-confirm", style: { borderLeft: "3px solid var(--ok)", background: "var(--ok-soft)" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", alignItems: "center" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", fontWeight: 600, color: "var(--ok)", fontSize: "13px" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheckCircle, { size: 16 }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("人工协同决策已提交，Agent 正在继续推进...", "Human Decision Submitted, Agent Resuming...") })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-ok animate-pulse", style: { fontSize: "11px" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(IconClock, { size: 11 }),
+          t("恢复执行中", "Resumed")
+        ] })
+      ] }),
+      recentInteractions.map((item, idx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: "8px", fontSize: "12px", background: "var(--bg)", padding: "8px 12px", borderRadius: "6px", border: "1px solid var(--border)" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--fg-muted)", fontSize: "11px", marginBottom: "2px" }, children: t("提问 / 事项:", "Prompt / Action:") }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 500, color: "var(--fg)" }, children: item.prompt }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--fg-muted)", fontSize: "11px", marginTop: "6px", marginBottom: "2px" }, children: t("你的回复 / 决策:", "Your Response / Decision:") }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, color: "var(--accent-strong)" }, children: item.user_response })
+      ] }, idx))
+    ] }),
+    (liveReasoning || liveContent || executingTool || completedLiveTools.length > 0) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", style: { border: "1px dashed var(--accent)", background: "var(--accent-soft)" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px", color: "var(--accent-strong)", fontWeight: 600 }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 16, className: "animate-pulse" }),
@@ -8319,7 +8630,33 @@ function ViewerApp() {
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "animate-pulse", style: { color: "var(--accent)", fontWeight: "bold" }, children: "▊" })
         ] })
       ] }),
-      liveContent && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", color: "var(--fg)", whiteSpace: "pre-wrap", marginTop: "6px" }, children: liveContent })
+      liveContent && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "13px", color: "var(--fg)", whiteSpace: "pre-wrap", marginTop: "6px" }, children: liveContent }),
+      completedLiveTools.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--accent-strong)" }, children: t("本轮已完成工具调用 (Completed Tool Invocations):", "Completed Tool Invocations:") }),
+        completedLiveTools.map((tool, idx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", style: { background: "var(--bg)", border: "1px solid var(--border)" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 13, style: { color: tool.success ? "var(--ok)" : "var(--danger)" } }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: tool.tool_name || tool.tool_id })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: `badge ${tool.success ? "badge-ok" : "badge-danger"}`, children: [
+                tool.success ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 10 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconX, { size: 10 }),
+                tool.success ? t("执行成功", "Success") : t("执行失败", "Failed")
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: "11px", color: "var(--fg-soft)" }, children: [
+                tool.duration_ms,
+                "ms"
+              ] })
+            ] })
+          ] }),
+          tool.output !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: "6px" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("执行结果 (Output Data):", "Output Data:") }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "160px", overflowY: "auto" }, children: typeof tool.output === "object" && tool.output !== null ? JSON.stringify(tool.output, null, 2) : String(tool.output) })
+          ] }),
+          tool.error && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: "6px", color: "var(--danger)", fontSize: "11px" }, children: tool.error })
+        ] }, idx))
+      ] })
     ] }),
     final_answer && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "card", style: { borderLeft: "3px solid var(--accent)" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
@@ -8374,10 +8711,27 @@ function ViewerApp() {
                   /* @__PURE__ */ jsxRuntimeExports.jsx(IconUser, { size: 11 }),
                   t("人类中途插话/纠偏", "Human Interruption")
                 ] }),
-                step.self_correction && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-warn", children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx(IconRotateCcw, { size: 10 }),
-                  t("自我修复", "Self-Correction")
-                ] }),
+                step.self_correction && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "span",
+                  {
+                    className: "badge badge-warn animate-pulse",
+                    style: {
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      background: "rgba(245, 158, 11, 0.18)",
+                      color: "#D97706",
+                      border: "1px solid rgba(245, 158, 11, 0.5)",
+                      boxShadow: "0 0 6px rgba(245, 158, 11, 0.25)"
+                    },
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(IconRotateCcw, { size: 11 }),
+                      t("自愈修复 (Self-Correction & Healed)", "Self-Correction & Healed")
+                    ]
+                  }
+                ),
                 step.step_type === "final_answer" && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-ok", children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 10 }),
                   t("收敛结论", "Final Answer")
@@ -8406,111 +8760,321 @@ function ViewerApp() {
                     marginBottom: "4px",
                     display: "flex",
                     alignItems: "center",
-                    gap: "4px"
+                    justifyContent: "space-between"
                   },
                   children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
-                    t("思维链 (Chain-of-Thought / Reasoning):", "Reasoning / Thought:")
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "4px" }, children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("思维链 (Chain-of-Thought / Reasoning):", "Reasoning / Thought:") })
+                    ] }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "button",
+                      {
+                        type: "button",
+                        className: "btn btn-sm",
+                        style: {
+                          padding: "1px 6px",
+                          fontSize: "10px",
+                          height: "auto",
+                          background: "transparent",
+                          borderColor: "var(--border)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "3px"
+                        },
+                        onClick: () => toggleThought(step.step_index || idx),
+                        children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx(
+                            IconChevronDown,
+                            {
+                              size: 11,
+                              style: {
+                                transform: collapsedThoughts[step.step_index || idx] ? "rotate(-90deg)" : "none",
+                                transition: "transform 0.15s ease"
+                              }
+                            }
+                          ),
+                          collapsedThoughts[step.step_index || idx] ? t("展开思维链", "Expand") : t("折叠思维链", "Collapse")
+                        ]
+                      }
+                    )
                   ]
                 }
               ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.5 }, children: step.thought })
+              !collapsedThoughts[step.step_index || idx] && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.5 }, children: step.thought })
             ] }) : null,
-            step.tool_calls && step.tool_calls.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }, children: step.tool_calls.map((tc2, tcIdx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", flexWrap: "wrap" }, children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
-                  tc2.tool_name === "ask_human" ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 14 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 14 }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: tc2.tool_name || tc2.tool_id }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "badge badge-accent", children: tc2.node_type })
+            step.tool_calls && step.tool_calls.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }, children: step.tool_calls.map((tc2, tcIdx) => {
+              var _a3, _b, _c;
+              return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between", flexWrap: "wrap" }, children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+                    tc2.tool_name === "ask_human" ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 14 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 14 }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: tc2.tool_name || tc2.tool_id }),
+                    (() => {
+                      const meta = getNodeTypeBadge(tc2.node_type);
+                      return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                        "span",
+                        {
+                          className: "badge",
+                          style: {
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "3px",
+                            fontSize: "10px",
+                            fontWeight: 600,
+                            color: meta.color,
+                            background: meta.bg,
+                            border: `1px solid ${meta.border}`
+                          },
+                          children: [
+                            meta.icon,
+                            meta.label
+                          ]
+                        }
+                      );
+                    })()
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    "span",
+                    {
+                      className: `badge ${tc2.success ? "badge-ok" : "badge-danger"}`,
+                      children: [
+                        tc2.success ? t("执行成功", "Success") : t("执行失败", "Failed"),
+                        " ",
+                        "(",
+                        tc2.duration_ms,
+                        "ms)"
+                      ]
+                    }
+                  )
                 ] }),
-                /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                  "span",
-                  {
-                    className: `badge ${tc2.success ? "badge-ok" : "badge-danger"}`,
-                    children: [
-                      tc2.success ? t("执行成功", "Success") : t("执行失败", "Failed"),
-                      " ",
-                      "(",
-                      tc2.duration_ms,
-                      "ms)"
-                    ]
-                  }
-                )
-              ] }),
-              tc2.tool_name === "ask_human" ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }, children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                  "div",
-                  {
-                    style: {
-                      background: "var(--accent-soft)",
-                      border: "1px solid var(--accent-border)",
-                      borderRadius: "6px",
-                      padding: "8px 10px"
-                    },
-                    children: [
-                      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--accent-strong)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }, children: [
-                        /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 13 }),
-                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("AI 提问内容 (Question):", "AI Question:") })
-                      ] }),
-                      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "12px", lineHeight: 1.5, color: "var(--fg)", whiteSpace: "pre-wrap" }, children: typeof tc2.input_args === "object" && tc2.input_args !== null && tc2.input_args.question ? String(tc2.input_args.question) : typeof tc2.input_args === "string" ? tc2.input_args : JSON.stringify(tc2.input_args, null, 2) })
-                    ]
-                  }
-                ),
-                /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                  "div",
-                  {
-                    style: {
-                      background: "var(--ok-soft)",
-                      border: "1px solid var(--ok)",
-                      borderRadius: "6px",
-                      padding: "8px 10px"
-                    },
-                    children: [
-                      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--ok)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }, children: [
-                        /* @__PURE__ */ jsxRuntimeExports.jsx(IconUser, { size: 13 }),
-                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("您的回复内容 (Your Response):", "Your Response:") })
-                      ] }),
-                      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "12px", lineHeight: 1.5, color: "var(--fg)", fontWeight: 500, whiteSpace: "pre-wrap" }, children: typeof tc2.output_data === "object" && tc2.output_data !== null && (tc2.output_data.user_response || tc2.output_data.answer) ? String(tc2.output_data.user_response || tc2.output_data.answer) : tc2.raw_response ? tc2.raw_response : typeof tc2.output_data === "string" ? tc2.output_data : JSON.stringify(tc2.output_data, null, 2) })
-                    ]
-                  }
-                )
-              ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("入参 Payload:", "Input Arguments:") }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", children: typeof tc2.input_args === "object" ? JSON.stringify(tc2.input_args, null, 2) : String(tc2.input_args) })
-                ] }),
-                tc2.output_data !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("执行输出 (Output):", "Output Data:") }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "180px" }, children: typeof tc2.output_data === "object" ? JSON.stringify(tc2.output_data, null, 2) : String(tc2.output_data) })
+                tc2.tool_name === "ask_human" ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }, children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    "div",
+                    {
+                      style: {
+                        background: "var(--accent-soft)",
+                        border: "1px solid var(--accent-border)",
+                        borderRadius: "6px",
+                        padding: "8px 10px"
+                      },
+                      children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--accent-strong)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }, children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 13 }),
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("AI 提问内容 (Question):", "AI Question:") })
+                        ] }),
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "12px", lineHeight: 1.5, color: "var(--fg)", whiteSpace: "pre-wrap" }, children: typeof tc2.input_args === "object" && tc2.input_args !== null && tc2.input_args.question ? String(tc2.input_args.question) : typeof tc2.input_args === "string" ? tc2.input_args : JSON.stringify(tc2.input_args, null, 2) })
+                      ]
+                    }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    "div",
+                    {
+                      style: {
+                        background: "var(--ok-soft)",
+                        border: "1px solid var(--ok)",
+                        borderRadius: "6px",
+                        padding: "8px 10px"
+                      },
+                      children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: "11px", fontWeight: 600, color: "var(--ok)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }, children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx(IconUser, { size: 13 }),
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("您的回复内容 (Your Response):", "Your Response:") })
+                        ] }),
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "12px", lineHeight: 1.5, color: "var(--fg)", fontWeight: 500, whiteSpace: "pre-wrap" }, children: typeof tc2.output_data === "object" && tc2.output_data !== null && (tc2.output_data.user_response || tc2.output_data.answer) ? String(tc2.output_data.user_response || tc2.output_data.answer) : tc2.raw_response ? tc2.raw_response : typeof tc2.output_data === "string" ? tc2.output_data : JSON.stringify(tc2.output_data, null, 2) })
+                      ]
+                    }
+                  )
+                ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "8px" }, children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("入参 Payload:", "Input Arguments:") }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", children: typeof tc2.input_args === "object" ? JSON.stringify(tc2.input_args, null, 2) : String(tc2.input_args) })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    "div",
+                    {
+                      style: {
+                        borderTop: "1px solid var(--border)",
+                        paddingTop: "6px",
+                        marginTop: "2px"
+                      },
+                      children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                          "div",
+                          {
+                            onClick: () => toggleResult(tc2.call_id),
+                            style: {
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              cursor: "pointer",
+                              padding: "4px 0"
+                            },
+                            children: [
+                              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                                "span",
+                                {
+                                  style: {
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    color: "var(--fg)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "4px"
+                                  },
+                                  children: [
+                                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                                      IconChevronDown,
+                                      {
+                                        size: 12,
+                                        style: {
+                                          transform: ((_a3 = expandedResults[tc2.call_id]) != null ? _a3 : !tc2.success) ? "none" : "rotate(-90deg)",
+                                          transition: "transform 0.15s ease"
+                                        }
+                                      }
+                                    ),
+                                    t("执行结果抽屉 (Result Drawer)", "Result Drawer")
+                                  ]
+                                }
+                              ),
+                              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: "10px", color: "var(--fg-soft)" }, children: ((_b = expandedResults[tc2.call_id]) != null ? _b : !tc2.success) ? t("点击收起", "Collapse") : t("点击展开查看宿主真实输出", "Expand Result") })
+                            ]
+                          }
+                        ),
+                        ((_c = expandedResults[tc2.call_id]) != null ? _c : !tc2.success) && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                          "div",
+                          {
+                            style: {
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "6px",
+                              marginTop: "6px"
+                            },
+                            children: [
+                              tc2.output_data !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                                  "div",
+                                  {
+                                    style: {
+                                      fontSize: "10px",
+                                      color: "var(--fg-muted)",
+                                      marginBottom: "2px",
+                                      fontWeight: 600
+                                    },
+                                    children: t("结构化输出 (Parsed JSON):", "Structured Output:")
+                                  }
+                                ),
+                                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "180px" }, children: typeof tc2.output_data === "object" ? JSON.stringify(tc2.output_data, null, 2) : String(tc2.output_data) })
+                              ] }),
+                              tc2.raw_response && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                                  "div",
+                                  {
+                                    style: {
+                                      fontSize: "10px",
+                                      color: "var(--fg-muted)",
+                                      marginBottom: "2px",
+                                      fontWeight: 600
+                                    },
+                                    children: t("宿主原生返回 (Raw Response):", "Raw Host Response:")
+                                  }
+                                ),
+                                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                                  "div",
+                                  {
+                                    className: "code-block",
+                                    style: { maxHeight: "140px", background: "var(--bg-subtle)" },
+                                    children: tc2.raw_response
+                                  }
+                                )
+                              ] }),
+                              tc2.error_message && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                                  "div",
+                                  {
+                                    style: {
+                                      fontSize: "10px",
+                                      color: "var(--danger)",
+                                      marginBottom: "2px",
+                                      fontWeight: 600
+                                    },
+                                    children: t("错误详情 (Error Detail):", "Error Detail:")
+                                  }
+                                ),
+                                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                                  "div",
+                                  {
+                                    className: "code-block",
+                                    style: {
+                                      borderColor: "var(--danger)",
+                                      color: "var(--danger)",
+                                      background: "var(--danger-soft)"
+                                    },
+                                    children: tc2.error_message
+                                  }
+                                )
+                              ] })
+                            ]
+                          }
+                        )
+                      ]
+                    }
+                  )
                 ] })
-              ] }),
-              tc2.error_message && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--danger)", marginBottom: "2px" }, children: t("错误详情 (Error):", "Error Message:") }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  "div",
-                  {
-                    className: "code-block",
-                    style: {
-                      borderColor: "var(--danger)",
-                      color: "var(--danger)",
-                      background: "var(--danger-soft)"
-                    },
-                    children: tc2.error_message
-                  }
-                )
-              ] })
-            ] }, tc2.call_id || tcIdx)) })
+              ] }, tc2.call_id || tcIdx);
+            }) })
           ] }, step.step_index || idx);
         }),
-        (liveReasoning || liveContent || executingTool) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "timeline-item", style: { borderLeftStyle: "dashed", borderLeftColor: "var(--accent)" }, children: [
+        (liveReasoning || liveContent || executingTool || recentInteractions.length > 0 || completedLiveTools.length > 0) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "timeline-item", style: { borderLeftStyle: "dashed", borderLeftColor: "var(--accent)" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "timeline-node ok animate-pulse", style: { borderColor: "var(--accent)", background: "var(--accent-soft)" }, children: timeline.length + 1 }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "row", style: { justifyContent: "space-between", alignItems: "center" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600, fontSize: "13px", color: "var(--accent-strong)" }, children: t(`Round ${timeline.length + 1} (正在执行)`, `Round ${timeline.length + 1} (In Progress)`) }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-accent animate-pulse", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),
-              executingTool ? t(`调用工具: ${executingTool.tool_name}`, `Tool: ${executingTool.tool_name}`) : t("大模型思考中", "Thinking...")
+              executingTool ? t(`调用工具: ${executingTool.tool_name}`, `Tool: ${executingTool.tool_name}`) : recentInteractions.length > 0 ? t("人工决策已提交，推进中", "Human Input Submitted, Resuming...") : completedLiveTools.length > 0 ? t("工具执行完毕，继续推理", "Tool Completed, Continuing...") : t("大模型思考中", "Thinking...")
             ] })
           ] }) }),
+          recentInteractions.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }, children: recentInteractions.map((item, idx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", style: { border: "1px solid var(--ok)", background: "var(--ok-soft)" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconBot, { size: 14 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: item.tool_name || "ask_human" })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "badge badge-ok", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 10 }),
+                t("已提交回复", "Submitted")
+              ] })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: "6px", fontSize: "12px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--fg-muted)", fontSize: "11px", marginBottom: "2px" }, children: t("提问内容:", "Question:") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 500, color: "var(--fg)" }, children: item.prompt }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--fg-muted)", fontSize: "11px", marginTop: "6px", marginBottom: "2px" }, children: t("用户输入 / 决策:", "User Response / Decision:") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, color: "var(--accent-strong)" }, children: item.user_response })
+            ] })
+          ] }, idx)) }),
+          completedLiveTools.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }, children: completedLiveTools.map((tool, idx) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tool-call-card", style: { background: "var(--bg)", border: "1px solid var(--border)" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { justifyContent: "space-between" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(IconWrench, { size: 13, style: { color: tool.success ? "var(--ok)" : "var(--danger)" } }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { style: { fontSize: "12px" }, children: tool.tool_name || tool.tool_id })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", style: { gap: "6px" }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: `badge ${tool.success ? "badge-ok" : "badge-danger"}`, children: [
+                  tool.success ? /* @__PURE__ */ jsxRuntimeExports.jsx(IconCheck, { size: 10 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(IconX, { size: 10 }),
+                  tool.success ? t("执行成功", "Success") : t("执行失败", "Failed")
+                ] }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: "11px", color: "var(--fg-soft)" }, children: [
+                  tool.duration_ms,
+                  "ms"
+                ] })
+              ] })
+            ] }),
+            tool.output !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: "6px" }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: "11px", color: "var(--fg-muted)", marginBottom: "2px" }, children: t("执行结果 (Output Data):", "Output Data:") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "code-block", style: { maxHeight: "160px", overflowY: "auto" }, children: typeof tool.output === "object" && tool.output !== null ? JSON.stringify(tool.output, null, 2) : String(tool.output) })
+            ] }),
+            tool.error && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: "6px", color: "var(--danger)", fontSize: "11px" }, children: tool.error })
+          ] }, idx)) }),
           liveReasoning && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "reasoning-box", style: { marginTop: "8px" }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontWeight: 600, fontSize: "11px", color: "var(--accent-strong)", marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }, children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(IconBrain, { size: 12 }),

@@ -1,7 +1,7 @@
 //! UI Call handlers for design-time operations in Agent config panel.
 
-use std::time::Instant;
 use serde_json::json;
+use std::time::Instant;
 
 use crate::client::{build_client, join_endpoint};
 use crate::types::{audit_tool_call_safety, LlmProviderConfig};
@@ -17,6 +17,7 @@ pub async fn handle_ui_call(
         "test_tool_safety" => test_tool_safety(params).await,
         "submit_human_response" => submit_human_response(params).await,
         "interrupt_agent" => interrupt_agent(params).await,
+        "convert_datasource_to_tools" => convert_datasource_to_tools(params).await,
         other => Err(format!("Unknown UI call method: {other}")),
     }
 }
@@ -32,15 +33,39 @@ async fn extract_provider_config(params: &serde_json::Value) -> Result<LlmProvid
 
 async fn test_connection(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let provider = extract_provider_config(&params).await?;
-    let client = build_client(&provider)?;
-    let url = join_endpoint(&provider.base_url, "models");
+    let trimmed_base = provider.base_url.trim();
+    if trimmed_base.is_empty() {
+        return Ok(json!({
+            "success": false,
+            "latency_ms": 0,
+            "error": "Base URL is required. Please specify a valid provider Base URL (e.g. https://api.openai.com/v1 or http://localhost:11434/v1)."
+        }));
+    }
 
+    let client = match build_client(&provider) {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(json!({
+                "success": false,
+                "latency_ms": 0,
+                "error": format!("Client configuration error: {e}")
+            }));
+        }
+    };
+
+    let url = join_endpoint(&provider.base_url, "models");
     let start = Instant::now();
-    let res = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Connection test failed: {e}"))?;
+
+    let res = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(json!({
+                "success": false,
+                "latency_ms": start.elapsed().as_millis() as u64,
+                "error": format!("Connection failed: {e}")
+            }));
+        }
+    };
 
     let latency_ms = start.elapsed().as_millis() as u64;
 
@@ -54,10 +79,16 @@ async fn test_connection(params: serde_json::Value) -> Result<serde_json::Value,
         }));
     }
 
-    let json_val: serde_json::Value = res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse JSON response: {e}"))?;
+    let json_val: serde_json::Value = match res.json().await {
+        Ok(val) => val,
+        Err(e) => {
+            return Ok(json!({
+                "success": false,
+                "latency_ms": latency_ms,
+                "error": format!("Failed to parse JSON response: {e}")
+            }));
+        }
+    };
 
     let models_count = json_val
         .get("data")
@@ -75,6 +106,10 @@ async fn test_connection(params: serde_json::Value) -> Result<serde_json::Value,
 
 async fn list_models(params: serde_json::Value) -> Result<serde_json::Value, String> {
     let provider = extract_provider_config(&params).await?;
+    let trimmed_base = provider.base_url.trim();
+    if trimmed_base.is_empty() {
+        return Err("Base URL is required. Please specify a valid provider Base URL.".to_string());
+    }
     let client = build_client(&provider)?;
     let url = join_endpoint(&provider.base_url, "models");
 
@@ -143,7 +178,11 @@ async fn submit_human_response(params: serde_json::Value) -> Result<serde_json::
             serde_json::from_value(resp_val.clone())
                 .map_err(|e| format!("Invalid human response payload: {e}"))?
         }
-    } else if let Some(text_str) = params.get("text").or_else(|| params.get("answer")).and_then(|v| v.as_str()) {
+    } else if let Some(text_str) = params
+        .get("text")
+        .or_else(|| params.get("answer"))
+        .and_then(|v| v.as_str())
+    {
         crate::types::HumanResponse {
             text: Some(text_str.to_string()),
             ..Default::default()
@@ -179,5 +218,27 @@ async fn interrupt_agent(params: serde_json::Value) -> Result<serde_json::Value,
         "success": true,
         "execution_id": execution_id,
         "message": "Interruption instruction queued for next agent step boundary"
+    }))
+}
+
+async fn convert_datasource_to_tools(
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let ds_type = params
+        .get("datasource_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("openapi");
+    let base_url = params.get("base_url").and_then(|v| v.as_str());
+    let items_val = params
+        .get("items")
+        .ok_or_else(|| "Missing 'items' parameter".to_string())?;
+    let items: Vec<crate::datasource::DataItem> = serde_json::from_value(items_val.clone())
+        .map_err(|e| format!("Invalid DataItem list: {e}"))?;
+
+    let tools = crate::datasource::convert_datasource_spec_to_tools(ds_type, &items, base_url);
+    Ok(json!({
+        "success": true,
+        "tools": tools,
+        "count": tools.len()
     }))
 }

@@ -3,7 +3,7 @@
 :root {
   /* 明暗模式由宿主下发的 data-theme 决定（docs/plugin-frontend-theme.md）；
      color-scheme 让 UA 原生控件（下拉列表/checkbox/滚动条）跟随 */
-  color-scheme: light;
+  color-scheme: light dark;
   --bg: #ffffff;
   --bg-subtle: #f8fafc;
   --bg-muted: #f1f5f9;
@@ -187,6 +187,60 @@ textarea {
   transition: border-color 0.15s ease;
 }
 
+/* Custom styled Checkbox matching Agent purple theme (#8B5CF6) */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--bg-input);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  margin: 0;
+  vertical-align: middle;
+  flex-shrink: 0;
+  position: relative;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+  background-color: var(--bg-subtle);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type="checkbox"]:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px rgba(139, 92, 246, 0.3);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #ffffff;
+  border-bottom: 2px solid #ffffff;
+  transform: rotate(-45deg) translate(0.5px, -0.5px);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--border);
+  background-color: var(--bg-muted);
+}
+
 /*
  * 原生 select 的外观（箭头、内阴影）由 UA 绘制、不跟随主题 —— 深色底上默认箭头
  * 会看不见或控件保留浅色原生外观。去掉原生外观，用两段渐变自绘下箭头，
@@ -196,6 +250,9 @@ select {
   -webkit-appearance: none;
   appearance: none;
   padding-right: 26px;
+  background-color: var(--bg-input);
+  color: var(--fg);
+  color-scheme: light dark;
   background-image:
     linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
     linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
@@ -205,6 +262,18 @@ select {
   background-size: 5px 5px;
   background-repeat: no-repeat;
   cursor: pointer;
+}
+
+:root[data-theme="dark"] select {
+  color-scheme: dark;
+  background-color: #1e293b;
+  color: #f8fafc;
+}
+
+:root[data-theme="light"] select {
+  color-scheme: light;
+  background-color: #ffffff;
+  color: #0f172a;
 }
 
 input[type="text"]:focus,
@@ -220,11 +289,37 @@ textarea {
   resize: vertical;
 }
 
-/* 原生下拉的选项列表由 UA 绘制：显式给出配色。否则深色模式下 UA 按浅色画
-   白底、文字却继承近白色的 --fg → 「白底白字」。 */
+/* 原生下拉的选项列表：强制给出自洽的前景与背景色，防止 WebKitGTK / 原生控件出现白底白字 */
+select option,
 option {
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   color: var(--fg);
+}
+
+@media (prefers-color-scheme: dark) {
+  select,
+  select option,
+  option {
+    color-scheme: dark;
+    background-color: #1e293b;
+    color: #f8fafc;
+  }
+}
+
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] select option,
+:root[data-theme="dark"] option {
+  color-scheme: dark;
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+:root[data-theme="light"] select,
+:root[data-theme="light"] select option,
+:root[data-theme="light"] option {
+  color-scheme: light;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
 }
 
 .btn {

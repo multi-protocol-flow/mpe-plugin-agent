@@ -68,9 +68,32 @@ pub fn build_client(config: &LlmProviderConfig) -> Result<reqwest::Client, Strin
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
 }
 
+/// Normalizes a base URL, ensuring appropriate http:// or https:// scheme prefix.
+pub fn normalize_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        if trimmed.starts_with("localhost")
+            || trimmed.starts_with("127.0.0.1")
+            || trimmed.starts_with("0.0.0.0")
+            || trimmed.contains(":11434")
+            || trimmed.contains(":8000")
+        {
+            format!("http://{}", trimmed)
+        } else {
+            format!("https://{}", trimmed)
+        }
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Normalizes endpoint URL by joining path to base_url without double slashes.
 pub fn join_endpoint(base_url: &str, endpoint: &str) -> String {
-    let base = base_url.trim_end_matches('/');
+    let normalized = normalize_base_url(base_url);
+    let base = normalized.trim_end_matches('/');
     let ep = endpoint.trim_start_matches('/');
     format!("{}/{}", base, ep)
 }
@@ -221,7 +244,10 @@ where
             .map(|s| s.to_string());
 
         let mut tool_calls = Vec::new();
-        if let Some(calls) = choice.and_then(|m| m.get("tool_calls")).and_then(|t| t.as_array()) {
+        if let Some(calls) = choice
+            .and_then(|m| m.get("tool_calls"))
+            .and_then(|t| t.as_array())
+        {
             for call in calls {
                 if let Ok(tc) = serde_json::from_value::<ToolCall>(call.clone()) {
                     tool_calls.push(tc);
@@ -310,7 +336,8 @@ where
                         }
                         if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                             for tc in tcs {
-                                let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                let idx =
+                                    tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                                 let entry = tool_calls_map.entry(idx).or_insert_with(|| {
                                     (
                                         String::new(),
@@ -324,7 +351,8 @@ where
                                     let trimmed = id.trim();
                                     if !trimmed.is_empty()
                                         && (entry.0.is_empty()
-                                            || (entry.0 != trimmed && trimmed.len() > entry.0.len()))
+                                            || (entry.0 != trimmed
+                                                && trimmed.len() > entry.0.len()))
                                     {
                                         entry.0 = trimmed.to_string();
                                     }
@@ -344,7 +372,8 @@ where
                                             }
                                         }
                                     }
-                                    if let Some(args) = f.get("arguments").and_then(|v| v.as_str()) {
+                                    if let Some(args) = f.get("arguments").and_then(|v| v.as_str())
+                                    {
                                         entry.3.push_str(args);
                                     }
                                 }
@@ -364,7 +393,11 @@ where
     for idx in indices {
         if let Some((id, kind, name, args)) = tool_calls_map.remove(&idx) {
             tool_calls.push(ToolCall {
-                id: if id.is_empty() { format!("call_{idx}") } else { id },
+                id: if id.is_empty() {
+                    format!("call_{idx}")
+                } else {
+                    id
+                },
                 kind,
                 function: FunctionCall {
                     name,
@@ -402,8 +435,34 @@ mod tests {
 
     #[test]
     fn test_join_endpoint() {
-        assert_eq!(join_endpoint("https://api.openai.com/v1/", "/chat/completions"), "https://api.openai.com/v1/chat/completions");
-        assert_eq!(join_endpoint("https://api.openai.com/v1", "chat/completions"), "https://api.openai.com/v1/chat/completions");
+        assert_eq!(
+            join_endpoint("https://api.openai.com/v1/", "/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            join_endpoint("https://api.openai.com/v1", "chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+    #[test]
+    fn test_normalize_base_url() {
+        assert_eq!(normalize_base_url(""), "");
+        assert_eq!(
+            normalize_base_url("localhost:11434/v1"),
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(
+            normalize_base_url("127.0.0.1:8000/v1"),
+            "http://127.0.0.1:8000/v1"
+        );
+        assert_eq!(
+            normalize_base_url("api.deepseek.com/v1"),
+            "https://api.deepseek.com/v1"
+        );
+        assert_eq!(
+            normalize_base_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1"
+        );
     }
 
     #[test]

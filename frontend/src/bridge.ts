@@ -45,6 +45,11 @@ function applyTheme(theme: 'light' | 'dark'): void {
   root.style.colorScheme = theme;
 }
 
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(isDark ? 'dark' : 'light');
+}
+
 function isTheme(value: unknown): value is 'light' | 'dark' {
   return value === 'light' || value === 'dark';
 }
@@ -88,8 +93,8 @@ function requestAction(action: string, params: unknown): Promise<unknown> {
   });
 }
 
-export function uiCall(method: string, payload: unknown): Promise<unknown> {
-  return requestAction('uiCall', { nodeType, method, payload });
+export function uiCall<T = unknown>(method: string, payload: unknown): Promise<T> {
+  return requestAction('uiCall', { nodeType, method, payload }) as Promise<T>;
 }
 
 export function submitHumanResponse(interactionId: string, response: HumanResponse): Promise<unknown> {

@@ -59,6 +59,8 @@ export interface AgentReactConfig {
   stream: boolean;
   enable_ask_human?: boolean;
   step_by_step?: boolean;
+  interaction_timeout_secs?: number;
+  mock_human_response?: string;
 }
 
 export interface TokenUsage {

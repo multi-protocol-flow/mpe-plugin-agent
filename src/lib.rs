@@ -9,6 +9,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 pub mod client;
+pub mod datasource;
 pub mod i18n;
 pub mod nodes;
 pub mod types;
@@ -36,10 +37,7 @@ fn operation_ports() -> Vec<PortDescription> {
 }
 
 fn agent_react_node() -> NodeDescription {
-    let mut node = NodeDescription::new(
-        "agent:react",
-        i18n::t("ReAct 智能体", "ReAct Agent"),
-    );
+    let mut node = NodeDescription::new("agent:react", i18n::t("ReAct 智能体", "ReAct Agent"));
     node.category = Some("ai".to_string());
     node.icon = Some("puzzle".to_string());
     node.color = Some("#8B5CF6".to_string());
@@ -63,7 +61,8 @@ fn agent_react_node() -> NodeDescription {
         "read_only_mode": false,
         "stream": true,
         "enable_ask_human": true,
-        "step_by_step": false
+        "step_by_step": false,
+        "interaction_timeout_secs": 60
     });
     node.capabilities = PluginCapabilities {
         streaming: true,
@@ -85,7 +84,8 @@ fn agent_react_node() -> NodeDescription {
             "read_only_mode": { "type": "boolean", "title": i18n::t("只读安全模式", "Read-Only Mode") },
             "stream": { "type": "boolean", "title": i18n::t("流式推理", "Streaming") },
             "enable_ask_human": { "type": "boolean", "title": i18n::t("启用人机提问 (ask_human)", "Enable ask_human Tool") },
-            "step_by_step": { "type": "boolean", "title": i18n::t("单步调试模式", "Step-by-Step Debug Mode") }
+            "step_by_step": { "type": "boolean", "title": i18n::t("单步调试模式", "Step-by-Step Debug Mode") },
+            "interaction_timeout_secs": { "type": "integer", "title": i18n::t("人机交互超时(秒)", "Interaction Timeout (s)") }
         },
         "required": ["user_prompt"]
     }));
@@ -109,9 +109,7 @@ impl Plugin for AgentPlugin {
 
     fn execute(&self, ctx: &mut ExecuteContext) -> impl Future<Output = ExecuteResult> + Send {
         let pool = self.pool.clone();
-        async move {
-            nodes::execute_react(ctx, &pool).await
-        }
+        async move { nodes::execute_react(ctx, &pool).await }
     }
 
     fn ui_call(

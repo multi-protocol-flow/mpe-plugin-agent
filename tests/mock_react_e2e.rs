@@ -90,10 +90,16 @@ async fn test_describe_agent_node() {
         .collect();
     assert_eq!(port_ids, vec!["in", "true", "false"]);
     // Verify frontend and viewer inline HTML are non-empty
-    let frontend = agent_node.get("frontend").and_then(|f| f.get("content")).and_then(|c| c.as_str());
+    let frontend = agent_node
+        .get("frontend")
+        .and_then(|f| f.get("content"))
+        .and_then(|c| c.as_str());
     assert!(frontend.is_some() && frontend.unwrap().contains("Agent Config Panel"));
 
-    let viewer = agent_node.get("viewer").and_then(|v| v.get("content")).and_then(|c| c.as_str());
+    let viewer = agent_node
+        .get("viewer")
+        .and_then(|v| v.get("content"))
+        .and_then(|c| c.as_str());
     assert!(viewer.is_some() && viewer.unwrap().contains("Agent Execution Viewer"));
 
     p.shutdown();
@@ -139,10 +145,7 @@ data: [DONE]\n\n";
 
     let result = resp.get("result").expect("result present");
     assert_eq!(result.get("success").and_then(|s| s.as_bool()), Some(true));
-    assert_eq!(
-        result.get("next_ports"),
-        Some(&json!(["true"]))
-    );
+    assert_eq!(result.get("next_ports"), Some(&json!(["true"])));
 
     let output = result.get("output_data").expect("output_data present");
     assert_eq!(
@@ -150,9 +153,15 @@ data: [DONE]\n\n";
         Some("42 is the answer to life.")
     );
     assert_eq!(output.get("iterations").and_then(|i| i.as_u64()), Some(1));
-    assert_eq!(output.get("tool_call_count").and_then(|t| t.as_u64()), Some(0));
+    assert_eq!(
+        output.get("tool_call_count").and_then(|t| t.as_u64()),
+        Some(0)
+    );
 
-    let timeline = output.get("timeline").and_then(|t| t.as_array()).expect("timeline");
+    let timeline = output
+        .get("timeline")
+        .and_then(|t| t.as_array())
+        .expect("timeline");
     assert_eq!(timeline.len(), 1);
     assert_eq!(timeline[0]["step_type"], "final_answer");
     assert_eq!(
@@ -185,21 +194,33 @@ data: [DONE]\n\n";
     // Mount sequential mock responses
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(r1_sse))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r1_sse),
+        )
         .up_to_n_times(1)
         .mount(&server)
         .await;
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(r2_sse))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r2_sse),
+        )
         .up_to_n_times(1)
         .mount(&server)
         .await;
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(r3_sse))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r3_sse),
+        )
         .mount(&server)
         .await;
 
@@ -243,10 +264,21 @@ data: [DONE]\n\n";
 
     let output = result.get("output_data").expect("output_data present");
     assert_eq!(output.get("iterations").and_then(|i| i.as_u64()), Some(3));
-    assert_eq!(output.get("tool_call_count").and_then(|t| t.as_u64()), Some(2));
-    assert_eq!(output.get("self_corrections_count").and_then(|s| s.as_u64()), Some(1));
+    assert_eq!(
+        output.get("tool_call_count").and_then(|t| t.as_u64()),
+        Some(2)
+    );
+    assert_eq!(
+        output
+            .get("self_corrections_count")
+            .and_then(|s| s.as_u64()),
+        Some(1)
+    );
 
-    let timeline = output.get("timeline").and_then(|t| t.as_array()).expect("timeline");
+    let timeline = output
+        .get("timeline")
+        .and_then(|t| t.as_array())
+        .expect("timeline");
     assert_eq!(timeline.len(), 3);
 
     // Round 1: tool call failed with wrong table
@@ -261,7 +293,10 @@ data: [DONE]\n\n";
 
     // Round 3: final answer step
     assert_eq!(timeline[2]["step_type"], "final_answer");
-    assert!(output["final_answer"].as_str().unwrap().contains("User table query complete"));
+    assert!(output["final_answer"]
+        .as_str()
+        .unwrap()
+        .contains("User table query complete"));
 
     p.shutdown();
 }
@@ -282,14 +317,22 @@ data: [DONE]\n\n";
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(r1_sse))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r1_sse),
+        )
         .up_to_n_times(1)
         .mount(&server)
         .await;
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(r2_sse))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r2_sse),
+        )
         .mount(&server)
         .await;
 
@@ -332,11 +375,22 @@ data: [DONE]\n\n";
     assert_eq!(result.get("success").and_then(|s| s.as_bool()), Some(true));
 
     let output = result.get("output_data").expect("output_data present");
-    assert_eq!(output.get("self_corrections_count").and_then(|s| s.as_u64()), Some(1));
+    assert_eq!(
+        output
+            .get("self_corrections_count")
+            .and_then(|s| s.as_u64()),
+        Some(1)
+    );
 
-    let timeline = output.get("timeline").and_then(|t| t.as_array()).expect("timeline");
+    let timeline = output
+        .get("timeline")
+        .and_then(|t| t.as_array())
+        .expect("timeline");
     assert_eq!(timeline[0]["tool_calls"][0]["success"], false);
-    assert!(timeline[0]["tool_calls"][0]["error_message"].as_str().unwrap().contains("Read-only guardrail blocked"));
+    assert!(timeline[0]["tool_calls"][0]["error_message"]
+        .as_str()
+        .unwrap()
+        .contains("Read-only guardrail blocked"));
 
     p.shutdown();
 }
@@ -347,14 +401,12 @@ async fn test_ui_calls() {
 
     Mock::given(method("GET"))
         .and(path("/models"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({
-                "data": [
-                    { "id": "gpt-4o" },
-                    { "id": "deepseek-chat" }
-                ]
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "id": "gpt-4o" },
+                { "id": "deepseek-chat" }
+            ]
+        })))
         .mount(&server)
         .await;
 
@@ -579,7 +631,143 @@ async fn test_react_calling_llm_chat_tool() {
     let result = resp.get("result").expect("result present");
     assert_eq!(result["success"], true);
     let output = result.get("output_data").expect("output_data");
-    assert!(output["final_answer"].as_str().unwrap().contains("LLM Chat 3 node is active"));
+    assert!(output["final_answer"]
+        .as_str()
+        .unwrap()
+        .contains("LLM Chat 3 node is active"));
+
+    p.shutdown();
+}
+
+#[tokio::test]
+async fn test_react_host_tool_bridge_dispatch() {
+    // 1. Mock Host Tool Bridge server
+    let bridge_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/tool/execute"))
+        .and(wiremock::matchers::header(
+            "x-mpe-bridge-token",
+            "bridge-secret-token",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({
+                    "success": true,
+                    "duration_ms": 18,
+                    "output": {
+                        "status": 200,
+                        "body": {
+                            "code": 0,
+                            "message": "hello from real host service"
+                        }
+                    },
+                    "error_message": null,
+                    "raw_response": "{\"code\": 0, \"message\": \"hello from real host service\"}"
+                })),
+        )
+        .mount(&bridge_server)
+        .await;
+
+    // 2. Mock LLM server (OpenAI chat completions)
+    let llm_server = MockServer::start().await;
+
+    // Round 1: Model invokes http:request tool
+    let r1_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Calling host GET /hello via Tool Bridge.\",\"tool_calls\":[{\"index\":0,\"id\":\"call_host_1\",\"type\":\"function\",\"function\":{\"name\":\"fetch_hello\",\"arguments\":\"{\\\"url\\\": \\\"http://127.0.0.1:18080/hello\\\"}\"}}]}}]}\n\n\
+data: [DONE]\n\n";
+
+    // Round 2: Model receives response and converges
+    let r2_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Received code 0 from host response.\",\"content\":\"Host service verified successfully. Return code 0.\"}}]}\n\n\
+data: [DONE]\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r1_sse),
+        )
+        .up_to_n_times(1)
+        .mount(&llm_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r2_sse),
+        )
+        .mount(&llm_server)
+        .await;
+
+    // 3. Spawn plugin process and execute agent:react with Tool Bridge provider injected
+    let mut p = PluginProcess::spawn();
+    let resp = p.request(
+        "execute",
+        json!({
+            "providers": {
+                "tool_bridge": {
+                    "url": bridge_server.uri(),
+                    "token": "bridge-secret-token"
+                }
+            },
+            "execution_id": "exec_bridge_test_001",
+            "config": {
+                "type": "agent:react",
+                "provider": {
+                    "base_url": llm_server.uri(),
+                    "api_key": "test-key",
+                    "model": "gpt-4o"
+                },
+                "system_prompt": "You are an autonomous ReAct agent with real host tools.",
+                "user_prompt": "Call hello API and verify code",
+                "tools": [
+                    {
+                        "id": "fetch_hello",
+                        "name": "fetch_hello",
+                        "description": "Fetch /hello from host HTTP service",
+                        "tool_type": "standalone_action",
+                        "target_node_type": "http:request",
+                        "fixed_config": {
+                            "method": "get"
+                        },
+                        "dynamic_schema": {
+                            "type": "object",
+                            "properties": {
+                                "url": { "type": "string" }
+                            }
+                        }
+                    }
+                ]
+            }
+        }),
+    );
+
+    let result = resp.get("result").expect("result present");
+    assert_eq!(result["success"], true);
+    let output = result.get("output_data").expect("output_data");
+    assert_eq!(output["success"], true);
+    assert!(output["final_answer"]
+        .as_str()
+        .unwrap()
+        .contains("Return code 0"));
+
+    // Verify timeline recorded the tool call from Host Bridge
+    let timeline = output["timeline"].as_array().expect("timeline array");
+    assert_eq!(timeline.len(), 2);
+    let tc = &timeline[0]["tool_calls"][0];
+    assert_eq!(tc["tool_name"], "fetch_hello");
+    assert_eq!(tc["node_type"], "http:request");
+    assert_eq!(tc["success"], true);
+    assert_eq!(tc["output_data"]["body"]["code"], 0);
+    assert!(tc["raw_response"]
+        .as_str()
+        .unwrap()
+        .contains("hello from real host service"));
 
     p.shutdown();
 }
