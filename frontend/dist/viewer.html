@@ -7586,7 +7586,7 @@ function postReady() {
 function postResize(height) {
   post("resize", { height });
 }
-function requestAction(action, params) {
+function requestAction(action, params = {}) {
   return new Promise((resolve, reject) => {
     const requestId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
     const timer = window.setTimeout(() => {

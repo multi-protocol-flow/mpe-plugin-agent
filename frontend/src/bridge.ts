@@ -76,7 +76,7 @@ export function postError(message: string): void {
   post('error', { message });
 }
 
-function requestAction(action: string, params: unknown): Promise<unknown> {
+export function requestAction(action: string, params: unknown = {}): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
     const requestId =
       typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -93,6 +93,9 @@ function requestAction(action: string, params: unknown): Promise<unknown> {
   });
 }
 
+export function getRegisteredNodes(): Promise<unknown> {
+  return requestAction('getRegisteredNodes', {});
+}
 export function uiCall<T = unknown>(method: string, payload: unknown): Promise<T> {
   return requestAction('uiCall', { nodeType, method, payload }) as Promise<T>;
 }

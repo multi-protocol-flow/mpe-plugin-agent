@@ -183,8 +183,12 @@ pub async fn execute_tool_dispatch(
             }
         }
         _ if !bridge_url.is_empty() => {
+            let timeout_ms = merged_config
+                .get("timeout_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60_000);
             let http_client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_millis(timeout_ms.max(5000)))
                 .build()
                 .unwrap_or_default();
 
@@ -268,8 +272,12 @@ pub async fn execute_tool_dispatch(
                 .to_uppercase();
 
             if url.starts_with("http://") || url.starts_with("https://") {
+                let timeout_ms = merged_config
+                    .get("timeout_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(15_000);
                 let http_client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(15))
+                    .timeout(Duration::from_millis(timeout_ms.max(2000)))
                     .build()
                     .unwrap_or_default();
 
@@ -324,48 +332,27 @@ pub async fn execute_tool_dispatch(
                     }
                 }
             } else {
-                let resp = serde_json::json!({ "status": 200, "url": url, "data": "OK" });
-                let raw = resp.to_string();
-                (true, Some(resp), None, raw)
-            }
-        }
-        "db:query" | "sql" => {
-            let sql = merged_config
-                .get("sql")
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
-            if sql.contains("wrong_table") || sql.contains("non_existent") {
-                let err_msg = format!("Table not found in query: {sql}");
+                let err_msg = format!(
+                    "Invalid HTTP URL: '{url}' (must start with http:// or https://)"
+                );
                 (
                     false,
                     None,
                     Some(err_msg.clone()),
                     format!("{{\"error\": \"{err_msg}\"}}"),
                 )
-            } else {
-                let sample_rows = serde_json::json!({
-                    "rows": [
-                        { "id": 1, "status": "ACTIVE", "name": "sample_record" }
-                    ],
-                    "rows_affected": 1
-                });
-                let raw = sample_rows.to_string();
-                (true, Some(sample_rows), None, raw)
             }
         }
-        "redis:cmd" | "redis:command" => {
-            let cmd = merged_config
-                .get("command")
-                .and_then(|s| s.as_str())
-                .unwrap_or("GET");
-            let resp = serde_json::json!({ "result": "OK", "command": cmd });
-            let raw = resp.to_string();
-            (true, Some(resp), None, raw)
-        }
-        _ => {
-            let resp = serde_json::json!({ "status": "success", "config": merged_config });
-            let raw = resp.to_string();
-            (true, Some(resp), None, raw)
+        other => {
+            let err_msg = format!(
+                "Tool Bridge is offline: cannot execute '{other}' without host connection. Please execute via MPE flow."
+            );
+            (
+                false,
+                None,
+                Some(err_msg.clone()),
+                format!("{{\"error\": \"{err_msg}\"}}"),
+            )
         }
     };
 

@@ -7586,7 +7586,7 @@ function postReady() {
 function postResize(height) {
   post("resize", { height });
 }
-function requestAction(action, params) {
+function requestAction(action, params = {}) {
   return new Promise((resolve, reject) => {
     const requestId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
     const timer = window.setTimeout(() => {
@@ -7596,6 +7596,9 @@ function requestAction(action, params) {
     pendingActions.set(requestId, { resolve, reject, timer });
     post("requestAction", { requestId, action, params });
   });
+}
+function getRegisteredNodes() {
+  return requestAction("getRegisteredNodes", {});
 }
 function uiCall(method, payload) {
   return requestAction("uiCall", { nodeType, method, payload });
@@ -7979,11 +7982,11 @@ const PROTOCOL_PALETTE = [
     defaultFixedConfig: { collection: "", connection_uuid: "" }
   },
   {
-    id: "redis_cmd",
-    nameZh: "Redis 命令 (redis:cmd)",
-    nameEn: "Redis Command (redis:cmd)",
+    id: "redis_command",
+    nameZh: "Redis 命令 (redis:command)",
+    nameEn: "Redis Command (redis:command)",
     category: "cache",
-    target_node_type: "redis:cmd",
+    target_node_type: "redis:command",
     icon: "zap",
     descZh: "执行 Redis 查询命令，如 GET, HGET, MGET, SCAN。",
     descEn: "Execute Redis query commands such as GET, HGET, MGET, SCAN.",
@@ -7991,9 +7994,9 @@ const PROTOCOL_PALETTE = [
       type: "object",
       properties: {
         command: { type: "string", description: "Redis command name (e.g. GET)" },
-        key: { type: "string", description: "Target cache key" }
+        args: { type: "string", description: 'JSON array of command arguments, e.g. ["key"]' }
       },
-      required: ["command", "key"]
+      required: ["command"]
     },
     defaultFixedConfig: { connection_uuid: "" }
   },
@@ -8073,10 +8076,10 @@ const PROTOCOL_PALETTE = [
   },
   {
     id: "subflow_exec",
-    nameZh: "执行子流程 (subflow)",
-    nameEn: "Subflow (subflow)",
+    nameZh: "执行子流程 (flow:sub)",
+    nameEn: "Subflow (flow:sub)",
     category: "subflow",
-    target_node_type: "subflow",
+    target_node_type: "flow:sub",
     icon: "folder",
     descZh: "将独立的 .mpf 流程作为高阶工具执行并汇总输出。",
     descEn: "Execute an independent .mpf subflow as a high-level tool.",
@@ -8086,7 +8089,7 @@ const PROTOCOL_PALETTE = [
         input_vars: { type: "object", description: "Input variables passed to the subflow" }
       }
     },
-    defaultFixedConfig: { flow_path: "" }
+    defaultFixedConfig: { target_flow_path: "" }
   }
 ];
 const DATASOURCE_PRESETS = {
@@ -8267,6 +8270,7 @@ function PanelApp() {
   var _a, _b, _c, _d, _e, _f;
   const [config, setConfig] = reactExports.useState(DEFAULT_CONFIG);
   const [availableNodes, setAvailableNodes] = reactExports.useState([]);
+  const [hostRegisteredNodes, setHostRegisteredNodes] = reactExports.useState([]);
   const [selectedPreset, setSelectedPreset] = reactExports.useState("openai");
   const [showAddToolModal, setShowAddToolModal] = reactExports.useState(false);
   const [activePaletteTab, setActivePaletteTab] = reactExports.useState("palette");
@@ -8427,6 +8431,52 @@ function PanelApp() {
     return unbind;
   }, []);
   reactExports.useEffect(() => {
+    getRegisteredNodes().then((data) => {
+      if (Array.isArray(data)) {
+        const valid = data.filter(
+          (n2) => n2 && n2.type_id && n2.type_id !== "agent:react" && n2.type_id !== "llm:provider" && n2.type_id !== "entry" && n2.type_id !== "end" && n2.type_id !== "conditional"
+        );
+        setHostRegisteredNodes(valid);
+      }
+    }).catch(() => {
+    });
+  }, []);
+  const effectivePaletteItems = reactExports.useMemo(() => {
+    var _a2;
+    if (hostRegisteredNodes.length === 0) {
+      return PROTOCOL_PALETTE;
+    }
+    const knownMap = new Map(PROTOCOL_PALETTE.map((p2) => [p2.target_node_type, p2]));
+    const dynamicItems = [];
+    for (const hostNode of hostRegisteredNodes) {
+      const known = knownMap.get(hostNode.type_id);
+      if (known) {
+        dynamicItems.push(known);
+        knownMap.delete(hostNode.type_id);
+      } else {
+        dynamicItems.push({
+          id: hostNode.type_id.replace(/[:\-]/g, "_"),
+          nameZh: hostNode.display_name,
+          nameEn: hostNode.display_name,
+          category: ((_a2 = hostNode.category) == null ? void 0 : _a2.toLowerCase()) || "api",
+          target_node_type: hostNode.type_id,
+          icon: "puzzle",
+          descZh: hostNode.description || `已注册的协议节点 (${hostNode.type_id})`,
+          descEn: hostNode.description || `Registered protocol node (${hostNode.type_id})`,
+          defaultDynamicSchema: {
+            type: "object",
+            properties: {}
+          },
+          defaultFixedConfig: hostNode.default_config || {}
+        });
+      }
+    }
+    for (const remaining of knownMap.values()) {
+      dynamicItems.push(remaining);
+    }
+    return dynamicItems;
+  }, [hostRegisteredNodes]);
+  reactExports.useEffect(() => {
     notifyConfig(config);
     postResize(document.body.scrollHeight || 750);
   }, [config, showAddToolModal]);
@@ -8564,7 +8614,7 @@ function PanelApp() {
       id: id2,
       name: id2,
       description: t(item.descZh, item.descEn),
-      tool_type: item.category === "subflow" ? "subflow" : "standalone_action",
+      tool_type: item.target_node_type === "flow:sub" || item.category === "subflow" ? "subflow" : "standalone_action",
       target_node_type: item.target_node_type,
       fixed_config: { ...item.defaultFixedConfig },
       dynamic_schema: { ...item.defaultDynamicSchema }
@@ -8597,9 +8647,9 @@ function PanelApp() {
         type: "object",
         properties: {
           command: { type: "string", description: "Redis command name (e.g. GET)" },
-          key: { type: "string", description: "Target cache key" }
+          args: { type: "string", description: 'JSON array of arguments, e.g. ["key"]' }
         },
-        required: ["command", "key"]
+        required: ["command"]
       };
     } else if (node.type.startsWith("http:request")) {
       defaultSchema = {
@@ -9157,7 +9207,7 @@ function PanelApp() {
                   maxHeight: "260px",
                   overflowY: "auto"
                 },
-                children: PROTOCOL_PALETTE.map((item) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                children: effectivePaletteItems.map((item) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
                   "div",
                   {
                     onClick: () => handleAddPaletteTool(item),
@@ -9440,7 +9490,7 @@ function PanelApp() {
           )
         }
       ) : config.tools.map((tool, idx) => {
-        var _a2;
+        var _a2, _b2;
         return /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "div",
           {
@@ -9545,7 +9595,7 @@ function PanelApp() {
                 ),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 500 }, children: t("敏感操作需人工二次审批 (HITL Confirmation)", "Require Human Approval before Execution (HITL)") })
               ] }) }),
-              (tool.tool_type === "subflow" || tool.target_node_type === "subflow") && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", children: [
+              (tool.tool_type === "subflow" || tool.target_node_type === "subflow" || tool.target_node_type === "flow:sub") && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { style: { display: "flex", alignItems: "center", gap: "4px" }, children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx(IconFolder, { size: 13 }),
                   /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: t("子流程文件路径 (.mpf)", "Subflow File Path (.mpf)") })
@@ -9554,14 +9604,17 @@ function PanelApp() {
                   "input",
                   {
                     type: "text",
-                    value: String(((_a2 = tool.fixed_config) == null ? void 0 : _a2.flow_path) || ""),
+                    value: String(
+                      ((_a2 = tool.fixed_config) == null ? void 0 : _a2.target_flow_path) || ((_b2 = tool.fixed_config) == null ? void 0 : _b2.flow_path) || ""
+                    ),
                     onChange: (e) => handleUpdateTool(idx, {
                       fixed_config: {
                         ...tool.fixed_config || {},
-                        flow_path: e.target.value
+                        target_flow_path: e.target.value
                       }
                     }),
-                    placeholder: "e.g. flows/order_troubleshoot.mpf"
+                    placeholder: "e.g. flows/order_troubleshoot.mpf",
+                    style: { fontSize: "12px" }
                   }
                 )
               ] }),

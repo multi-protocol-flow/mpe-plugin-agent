@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  getRegisteredNodes,
   initBridge,
   notifyConfig,
   postResize,
@@ -230,11 +231,11 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
     defaultFixedConfig: { collection: '', connection_uuid: '' },
   },
   {
-    id: 'redis_cmd',
-    nameZh: 'Redis 命令 (redis:cmd)',
-    nameEn: 'Redis Command (redis:cmd)',
+    id: 'redis_command',
+    nameZh: 'Redis 命令 (redis:command)',
+    nameEn: 'Redis Command (redis:command)',
     category: 'cache',
-    target_node_type: 'redis:cmd',
+    target_node_type: 'redis:command',
     icon: 'zap',
     descZh: '执行 Redis 查询命令，如 GET, HGET, MGET, SCAN。',
     descEn: 'Execute Redis query commands such as GET, HGET, MGET, SCAN.',
@@ -242,9 +243,9 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Redis command name (e.g. GET)' },
-        key: { type: 'string', description: 'Target cache key' },
+        args: { type: 'string', description: 'JSON array of command arguments, e.g. ["key"]' },
       },
-      required: ['command', 'key'],
+      required: ['command'],
     },
     defaultFixedConfig: { connection_uuid: '' },
   },
@@ -324,10 +325,10 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
   },
   {
     id: 'subflow_exec',
-    nameZh: '执行子流程 (subflow)',
-    nameEn: 'Subflow (subflow)',
+    nameZh: '执行子流程 (flow:sub)',
+    nameEn: 'Subflow (flow:sub)',
     category: 'subflow',
-    target_node_type: 'subflow',
+    target_node_type: 'flow:sub',
     icon: 'folder',
     descZh: '将独立的 .mpf 流程作为高阶工具执行并汇总输出。',
     descEn: 'Execute an independent .mpf subflow as a high-level tool.',
@@ -337,7 +338,7 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
         input_vars: { type: 'object', description: 'Input variables passed to the subflow' },
       },
     },
-    defaultFixedConfig: { flow_path: '' },
+    defaultFixedConfig: { target_flow_path: '' },
   },
 ];
 const DATASOURCE_PRESETS: Record<
@@ -537,6 +538,16 @@ const DEFAULT_CONFIG: AgentReactConfig = {
 function PanelApp() {
   const [config, setConfig] = useState<AgentReactConfig>(DEFAULT_CONFIG);
   const [availableNodes, setAvailableNodes] = useState<PluginIframeNodeSnapshot[]>([]);
+  const [hostRegisteredNodes, setHostRegisteredNodes] = useState<
+    Array<{
+      type_id: string;
+      display_name: string;
+      category?: string;
+      description?: string;
+      default_config?: Record<string, unknown>;
+      config_schema?: Record<string, unknown>;
+    }>
+  >([]);
   const [selectedPreset, setSelectedPreset] = useState<string>('openai');
   const [showAddToolModal, setShowAddToolModal] = useState<boolean>(false);
   const [activePaletteTab, setActivePaletteTab] = useState<'palette' | 'canvas' | 'datasource'>('palette');
@@ -721,6 +732,70 @@ function PanelApp() {
   }, []);
 
   useEffect(() => {
+    getRegisteredNodes()
+      .then((data) => {
+        if (Array.isArray(data)) {
+          const valid = (
+            data as Array<{
+              type_id: string;
+              display_name: string;
+              category?: string;
+              description?: string;
+              default_config?: Record<string, unknown>;
+              config_schema?: Record<string, unknown>;
+            }>
+          ).filter(
+            (n) =>
+              n &&
+              n.type_id &&
+              n.type_id !== 'agent:react' &&
+              n.type_id !== 'llm:provider' &&
+              n.type_id !== 'entry' &&
+              n.type_id !== 'end' &&
+              n.type_id !== 'conditional'
+          );
+          setHostRegisteredNodes(valid);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const effectivePaletteItems = useMemo<PaletteItem[]>(() => {
+    if (hostRegisteredNodes.length === 0) {
+      return PROTOCOL_PALETTE;
+    }
+    const knownMap = new Map(PROTOCOL_PALETTE.map((p) => [p.target_node_type, p]));
+    const dynamicItems: PaletteItem[] = [];
+    for (const hostNode of hostRegisteredNodes) {
+      const known = knownMap.get(hostNode.type_id);
+      if (known) {
+        dynamicItems.push(known);
+        knownMap.delete(hostNode.type_id);
+      } else {
+        dynamicItems.push({
+          id: hostNode.type_id.replace(/[:\-]/g, '_'),
+          nameZh: hostNode.display_name,
+          nameEn: hostNode.display_name,
+          category: (hostNode.category?.toLowerCase() as PaletteItem['category']) || 'api',
+          target_node_type: hostNode.type_id,
+          icon: 'puzzle',
+          descZh: hostNode.description || `已注册的协议节点 (${hostNode.type_id})`,
+          descEn: hostNode.description || `Registered protocol node (${hostNode.type_id})`,
+          defaultDynamicSchema: {
+            type: 'object',
+            properties: {},
+          },
+          defaultFixedConfig: hostNode.default_config || {},
+        });
+      }
+    }
+    for (const remaining of knownMap.values()) {
+      dynamicItems.push(remaining);
+    }
+    return dynamicItems;
+  }, [hostRegisteredNodes]);
+
+  useEffect(() => {
     notifyConfig(config);
     postResize(document.body.scrollHeight || 750);
   }, [config, showAddToolModal]);
@@ -875,7 +950,10 @@ function PanelApp() {
       id,
       name: id,
       description: t(item.descZh, item.descEn),
-      tool_type: item.category === 'subflow' ? 'subflow' : 'standalone_action',
+      tool_type:
+        item.target_node_type === 'flow:sub' || item.category === 'subflow'
+          ? 'subflow'
+          : 'standalone_action',
       target_node_type: item.target_node_type,
       fixed_config: { ...item.defaultFixedConfig },
       dynamic_schema: { ...item.defaultDynamicSchema },
@@ -912,9 +990,9 @@ function PanelApp() {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Redis command name (e.g. GET)' },
-          key: { type: 'string', description: 'Target cache key' },
+          args: { type: 'string', description: 'JSON array of arguments, e.g. ["key"]' },
         },
-        required: ['command', 'key'],
+        required: ['command'],
       };
     } else if (node.type.startsWith('http:request')) {
       defaultSchema = {
@@ -1460,7 +1538,7 @@ function PanelApp() {
                   overflowY: 'auto',
                 }}
               >
-                {PROTOCOL_PALETTE.map((item) => (
+                {effectivePaletteItems.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => handleAddPaletteTool(item)}
@@ -1842,7 +1920,9 @@ function PanelApp() {
               </div>
 
               {/* Subflow Flow Path Configuration */}
-              {(tool.tool_type === 'subflow' || tool.target_node_type === 'subflow') && (
+              {(tool.tool_type === 'subflow' ||
+                tool.target_node_type === 'subflow' ||
+                tool.target_node_type === 'flow:sub') && (
                 <div className="col">
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <IconFolder size={13} />
@@ -1850,16 +1930,21 @@ function PanelApp() {
                   </label>
                   <input
                     type="text"
-                    value={String(tool.fixed_config?.flow_path || '')}
+                    value={String(
+                      tool.fixed_config?.target_flow_path ||
+                        tool.fixed_config?.flow_path ||
+                        ''
+                    )}
                     onChange={(e) =>
                       handleUpdateTool(idx, {
                         fixed_config: {
                           ...(tool.fixed_config || {}),
-                          flow_path: e.target.value,
+                          target_flow_path: e.target.value,
                         },
                       })
                     }
                     placeholder="e.g. flows/order_troubleshoot.mpf"
+                    style={{ fontSize: '12px' }}
                   />
                 </div>
               )}

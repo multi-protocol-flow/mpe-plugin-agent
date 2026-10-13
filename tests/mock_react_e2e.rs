@@ -175,7 +175,46 @@ data: [DONE]\n\n";
 #[tokio::test]
 async fn test_react_self_correction_loop() {
     let server = MockServer::start().await;
+    let bridge_server = MockServer::start().await;
 
+    // Round 1: Model calls db:query with wrong_table -> Bridge returns error
+    Mock::given(method("POST"))
+        .and(path("/tool/execute"))
+        .and(wiremock::matchers::body_string_contains("wrong_table"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({
+                    "success": false,
+                    "duration_ms": 12,
+                    "output": null,
+                    "error_message": "Table not found in query: wrong_table",
+                    "raw_response": "{\"error\": \"Table not found in query: wrong_table\"}"
+                })),
+        )
+        .mount(&bridge_server)
+        .await;
+
+    // Round 2: Model queries users -> Bridge returns success
+    Mock::given(method("POST"))
+        .and(path("/tool/execute"))
+        .and(wiremock::matchers::body_string_contains("users"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({
+                    "success": true,
+                    "duration_ms": 16,
+                    "output": {
+                        "rows": [{ "id": 1, "status": "ACTIVE", "name": "sample_record" }],
+                        "rows_affected": 1
+                    },
+                    "error_message": null,
+                    "raw_response": "{\"rows\": [{\"id\": 1, \"status\": \"ACTIVE\", \"name\": \"sample_record\"}]}"
+                })),
+        )
+        .mount(&bridge_server)
+        .await;
     // Round 1: Model calls db:query with wrong_table
     let r1_sse = "\
 data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Querying wrong_table first.\",\"tool_calls\":[{\"index\":0,\"id\":\"call_001\",\"type\":\"function\",\"function\":{\"name\":\"query_db\",\"arguments\":\"{\\\"sql\\\": \\\"SELECT * FROM wrong_table;\\\"}\"}}]}}]}\n\n\
@@ -228,6 +267,12 @@ data: [DONE]\n\n";
     let resp = p.request(
         "execute",
         json!({
+            "providers": {
+                "tool_bridge": {
+                    "url": bridge_server.uri(),
+                    "token": "test-bridge-token"
+                }
+            },
             "config": {
                 "type": "agent:react",
                 "provider": {
