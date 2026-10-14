@@ -816,3 +816,226 @@ data: [DONE]\n\n";
 
     p.shutdown();
 }
+
+#[tokio::test]
+async fn test_react_structured_output_with_self_healing_and_variable_export() {
+    let server = MockServer::start().await;
+
+    // Round 1: Model outputs non-JSON plain text
+    let r1_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Analyzing system status...\",\"content\":\"The system experienced an OOM error on the worker pod.\"}}]}\n\n\
+data: [DONE]\n\n";
+
+    // Round 2: After receiving 'Structured Output Validation Failed' feedback, model self-corrects with valid JSON
+    let r2_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Formatting as strict JSON according to schema.\",\"content\":\"```json\\n{\\n  \\\"severity\\\": \\\"P1\\\",\\n  \\\"root_cause\\\": \\\"OOM on worker pod\\\",\\n  \\\"auto_fixed\\\": true,\\n  \\\"recommendation\\\": \\\"Scale up memory limit to 2Gi\\\"\\n}\\n```\"}}]}\n\n\
+data: [DONE]\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r1_sse),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_string_contains("Structured Output Validation Failed"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r2_sse),
+        )
+        .mount(&server)
+        .await;
+
+    let target_schema = json!({
+        "type": "object",
+        "properties": {
+            "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+            "root_cause": { "type": "string" },
+            "auto_fixed": { "type": "boolean" },
+            "recommendation": { "type": "string" }
+        },
+        "required": ["severity", "root_cause", "auto_fixed", "recommendation"]
+    });
+
+    let mut p = PluginProcess::spawn();
+    let resp = p.request(
+        "execute",
+        json!({
+            "config": {
+                "type": "agent:react",
+                "provider": {
+                    "base_url": server.uri(),
+                    "api_key": "test-key",
+                    "model": "gpt-4o",
+                },
+                "system_prompt": "You are an autonomous SRE agent.",
+                "user_prompt": "Diagnose the incident and output structured report.",
+                "tools": [],
+                "max_iterations": 5,
+                "structured_output_enabled": true,
+                "structured_output_schema": target_schema,
+                "export_variables": true
+            }
+        }),
+    );
+
+    let result = resp.get("result").expect("result present");
+    assert_eq!(result["success"], true);
+    assert_eq!(result["next_ports"], json!(["true"]));
+
+    let output = result.get("output_data").expect("output_data present");
+    assert_eq!(output["success"], true);
+
+    // Verify structured_output field
+    let structured = &output["structured_output"];
+    assert_eq!(structured["severity"], "P1");
+    assert_eq!(structured["root_cause"], "OOM on worker pod");
+    assert_eq!(structured["auto_fixed"], true);
+    assert_eq!(structured["recommendation"], "Scale up memory limit to 2Gi");
+
+    // Verify data field also mirrors structured_output for downstream {{steps.agent.output.data.key}}
+    let data = &output["data"];
+    assert_eq!(data["severity"], "P1");
+    assert_eq!(data["auto_fixed"], true);
+
+    // Verify variable_updates at top-level result
+    let var_updates = result.get("variable_updates").expect("variable_updates present");
+    assert_eq!(var_updates["severity"], "P1");
+    assert_eq!(var_updates["root_cause"], "OOM on worker pod");
+    assert_eq!(var_updates["auto_fixed"], true);
+
+    // Verify timeline contains self_correction step in round 1 and final_answer in round 2
+    let timeline = output["timeline"].as_array().expect("timeline array");
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0]["step_type"], "self_correction");
+    assert_eq!(timeline[0]["self_correction"], true);
+    assert_eq!(timeline[1]["step_type"], "final_answer");
+
+    p.shutdown();
+}
+
+#[tokio::test]
+async fn test_react_large_tool_output_truncation_shield() {
+    let server = MockServer::start().await;
+    let bridge_server = MockServer::start().await;
+
+    // Generate large tool response: 50 database rows
+    let rows: Vec<Value> = (1..=50)
+        .map(|i| json!({ "id": i, "detail": format!("Large log record #{i} with trace data") }))
+        .collect();
+    let large_tool_output = json!({
+        "rows": rows,
+        "rows_affected": 50
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/tool/execute"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "success": true,
+                    "output": large_tool_output,
+                    "error": null,
+                    "raw_response": "{\"rows\":[...50 items...]}",
+                    "duration_ms": 25
+                })),
+        )
+        .mount(&bridge_server)
+        .await;
+
+    // Round 1: Model calls query_logs
+    let r1_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"index\":0,\"id\":\"call_db_1\",\"type\":\"function\",\"function\":{\"name\":\"query_logs\",\"arguments\":\"{\\\"query\\\":\\\"ALL\\\"}\"}}]}}]}\n\n\
+data: [DONE]\n\n";
+
+    // Round 2: LLM receives truncated output message and produces final answer
+    let r2_sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Analyzed all 50 logs. All normal.\"}}]}\n\n\
+data: [DONE]\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r1_sse),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    // Round 2 mock asserts that the truncation note was fed to the LLM
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_string_contains("[Note: Database rows truncated - showing 10 of 50 rows]"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(r2_sse),
+        )
+        .mount(&server)
+        .await;
+
+    let mut p = PluginProcess::spawn();
+    let resp = p.request(
+        "execute",
+        json!({
+            "providers": {
+                "tool_bridge": {
+                    "url": bridge_server.uri(),
+                    "token": "bridge-token"
+                }
+            },
+            "config": {
+                "type": "agent:react",
+                "provider": {
+                    "base_url": server.uri(),
+                    "api_key": "test-key",
+                    "model": "gpt-4o",
+                },
+                "system_prompt": "You are a log inspection agent.",
+                "user_prompt": "Check database logs.",
+                "tools": [
+                    {
+                        "id": "query_logs",
+                        "name": "query_logs",
+                        "description": "Query database logs",
+                        "tool_type": "standalone_action",
+                        "target_node_type": "db:query",
+                        "fixed_config": {},
+                        "dynamic_schema": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string" }
+                            }
+                        }
+                    }
+                ],
+                "max_iterations": 5
+            }
+        }),
+    );
+
+    let result = resp.get("result").expect("result present");
+    assert_eq!(result["success"], true);
+
+    let output = result.get("output_data").expect("output_data present");
+    assert_eq!(output["success"], true);
+    assert_eq!(output["final_answer"], "Analyzed all 50 logs. All normal.");
+
+    // In timeline, raw untruncated output MUST be preserved for human audit!
+    let timeline = output["timeline"].as_array().expect("timeline array");
+    let tool_call = &timeline[0]["tool_calls"][0];
+    assert_eq!(tool_call["success"], true);
+    let output_rows = tool_call["output_data"]["rows"].as_array().expect("rows array");
+    assert_eq!(output_rows.len(), 50, "Timeline must retain all 50 raw untruncated rows");
+
+    p.shutdown();
+}

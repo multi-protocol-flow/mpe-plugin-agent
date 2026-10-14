@@ -162,6 +162,18 @@ pub struct AgentReactConfig {
     /// Optional mock human response for non-interactive / single-node test mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mock_human_response: Option<String>,
+
+    /// Whether to enforce strict JSON schema structured output (default: false).
+    #[serde(default)]
+    pub structured_output_enabled: bool,
+
+    /// Target JSON Schema for final answer convergence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output_schema: Option<serde_json::Value>,
+
+    /// Auto-export flat top-level keys to flow variables (default: true).
+    #[serde(default = "default_true")]
+    pub export_variables: bool,
 }
 
 fn default_system_prompt() -> String {
@@ -212,6 +224,9 @@ impl Default for AgentReactConfig {
             step_by_step: false,
             interaction_timeout_secs: default_interaction_timeout_secs(),
             mock_human_response: None,
+            structured_output_enabled: false,
+            structured_output_schema: None,
+            export_variables: true,
         }
     }
 }
@@ -371,6 +386,12 @@ pub struct AgentReactOutput {
     pub token_usage: TokenUsage,
     pub total_duration_ms: u64,
     pub timeline: Vec<TimelineStep>,
+    /// Validated structured output JSON matching target schema (if enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<serde_json::Value>,
+    /// Validation error messages if structured output validation failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output_errors: Option<Vec<String>>,
 }
 /// A pending interaction request waiting for human intervention.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -745,6 +766,131 @@ pub fn resolve_effective_provider(
     Ok(provider)
 }
 
+/// Truncates large tool output for LLM context injection to prevent token overflow.
+pub fn truncate_tool_output(output: &serde_json::Value, max_chars: usize) -> String {
+    if output.is_null() {
+        return "{}".to_string();
+    }
+
+    let mut result_str = if let Some(arr) = output.as_array() {
+        if arr.len() > 10 {
+            let truncated_arr = serde_json::Value::Array(arr[..10].to_vec());
+            let json_str = serde_json::to_string(&truncated_arr).unwrap_or_else(|_| "[]".to_string());
+            format!("{}\n[Note: Output array truncated - showing 10 of {} items]", json_str, arr.len())
+        } else {
+            serde_json::to_string(output).unwrap_or_else(|_| "{}".to_string())
+        }
+    } else if let Some(obj) = output.as_object() {
+        if let Some(rows) = obj.get("rows").and_then(|r| r.as_array()) {
+            if rows.len() > 10 {
+                let mut truncated_obj = obj.clone();
+                truncated_obj.insert("rows".to_string(), serde_json::Value::Array(rows[..10].to_vec()));
+                let json_str = serde_json::to_string(&truncated_obj).unwrap_or_else(|_| "{}".to_string());
+                format!("{}\n[Note: Database rows truncated - showing 10 of {} rows]", json_str, rows.len())
+            } else {
+                serde_json::to_string(output).unwrap_or_else(|_| "{}".to_string())
+            }
+        } else {
+            serde_json::to_string(output).unwrap_or_else(|_| "{}".to_string())
+        }
+    } else {
+        serde_json::to_string(output).unwrap_or_else(|_| "{}".to_string())
+    };
+
+    if result_str.trim().is_empty() {
+        return "{}".to_string();
+    }
+
+    if result_str.chars().count() > max_chars {
+        let original_bytes = result_str.len();
+        let truncated: String = result_str.chars().take(max_chars).collect();
+        result_str = format!("{}\n[Note: Output text truncated - original length {} bytes]", truncated, original_bytes);
+    }
+
+    result_str
+}
+
+/// Truncates error messages to avoid blowing up context window with huge stack traces.
+pub fn truncate_error_message(err: &str, max_chars: usize) -> String {
+    if err.chars().count() > max_chars {
+        let truncated: String = err.chars().take(max_chars).collect();
+        format!("{truncated}... [Error truncated]")
+    } else {
+        err.to_string()
+    }
+}
+
+/// Extracts JSON value from raw model output, stripping Markdown code blocks if present.
+pub fn extract_json_from_text(text: &str) -> Option<serde_json::Value> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Direct JSON parse attempt
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Some(val);
+    }
+
+    // Try finding code block ```json ... ``` or ``` ... ```
+    if let Some(start) = trimmed.find("```") {
+        let content_after = &trimmed[start + 3..];
+        let content_start = if let Some(stripped) = content_after.strip_prefix("json") {
+            stripped
+        } else {
+            content_after
+        };
+        if let Some(end) = content_start.find("```") {
+            let candidate = content_start[..end].trim();
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+                return Some(val);
+            }
+        }
+    }
+
+    // Try finding outermost { ... }
+    if let (Some(first_brace), Some(last_brace)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if first_brace < last_brace {
+            let candidate = &trimmed[first_brace..=last_brace];
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+                return Some(val);
+            }
+        }
+    }
+
+    // Try finding outermost [ ... ]
+    if let (Some(first_bracket), Some(last_bracket)) = (trimmed.find('['), trimmed.rfind(']')) {
+        if first_bracket < last_bracket {
+            let candidate = &trimmed[first_bracket..=last_bracket];
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+                return Some(val);
+            }
+        }
+    }
+
+    None
+}
+
+/// Validates a parsed JSON value against a JSON Schema.
+pub fn validate_structured_output(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Result<(), Vec<String>> {
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|e| vec![format!("Invalid JSON Schema: {e}")])?;
+
+    let errors: Vec<String> = validator
+        .iter_errors(value)
+        .map(|e| e.to_string())
+        .collect();
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -907,5 +1053,120 @@ mod tests {
 
         assert_eq!(resolved.model, "deepseek-reasoner");
         assert_eq!(resolved.timeout_ms, 45000);
+    }
+
+    #[test]
+    fn test_truncate_tool_output_null() {
+        let val = serde_json::Value::Null;
+        let truncated = truncate_tool_output(&val, 4000);
+        assert_eq!(truncated, "{}");
+    }
+
+    #[test]
+    fn test_truncate_tool_output_array_under_limit() {
+        let val = serde_json::json!([1, 2, 3, 4, 5]);
+        let truncated = truncate_tool_output(&val, 4000);
+        assert_eq!(truncated, "[1,2,3,4,5]");
+    }
+
+    #[test]
+    fn test_truncate_tool_output_array_over_limit() {
+        let items: Vec<i32> = (1..=25).collect();
+        let val = serde_json::json!(items);
+        let truncated = truncate_tool_output(&val, 4000);
+        assert!(truncated.contains("[Note: Output array truncated - showing 10 of 25 items]"));
+        assert!(truncated.starts_with("[1,2,3,4,5,6,7,8,9,10]"));
+    }
+
+    #[test]
+    fn test_truncate_tool_output_database_rows() {
+        let rows: Vec<serde_json::Value> = (1..=15)
+            .map(|i| serde_json::json!({ "id": i, "name": format!("user_{i}") }))
+            .collect();
+        let val = serde_json::json!({
+            "rows": rows,
+            "rows_affected": 15
+        });
+        let truncated = truncate_tool_output(&val, 4000);
+        assert!(truncated.contains("[Note: Database rows truncated - showing 10 of 15 rows]"));
+        assert!(truncated.contains("\"rows_affected\":15"));
+    }
+
+    #[test]
+    fn test_truncate_tool_output_max_chars() {
+        let huge_string = "a".repeat(5000);
+        let val = serde_json::json!({ "text": huge_string });
+        let truncated = truncate_tool_output(&val, 100);
+        assert!(truncated.contains("[Note: Output text truncated - original length"));
+        assert!(truncated.contains("bytes]"));
+    }
+
+    #[test]
+    fn test_truncate_error_message() {
+        let short_err = "Connection refused";
+        assert_eq!(truncate_error_message(short_err, 50), short_err);
+
+        let long_err = "x".repeat(200);
+        let truncated = truncate_error_message(&long_err, 50);
+        assert_eq!(truncated.len(), 50 + "... [Error truncated]".len());
+        assert!(truncated.ends_with("... [Error truncated]"));
+    }
+
+    #[test]
+    fn test_extract_json_from_text() {
+        // Direct JSON
+        let direct = "{\"status\": \"ok\"}";
+        assert_eq!(
+            extract_json_from_text(direct),
+            Some(serde_json::json!({"status": "ok"}))
+        );
+
+        // Markdown code block
+        let markdown = "Here is the result:\n```json\n{\n  \"severity\": \"P1\",\n  \"fixed\": true\n}\n```\nHope it helps!";
+        assert_eq!(
+            extract_json_from_text(markdown),
+            Some(serde_json::json!({"severity": "P1", "fixed": true}))
+        );
+
+        // Surrounding commentary without markdown code block
+        let commentary = "Result: {\"count\": 42} (confirmed)";
+        assert_eq!(
+            extract_json_from_text(commentary),
+            Some(serde_json::json!({"count": 42}))
+        );
+
+        // Invalid
+        assert_eq!(extract_json_from_text("no json here"), None);
+    }
+
+    #[test]
+    fn test_validate_structured_output() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+                "auto_fixed": { "type": "boolean" }
+            },
+            "required": ["severity", "auto_fixed"]
+        });
+
+        let valid = serde_json::json!({
+            "severity": "P1",
+            "auto_fixed": false
+        });
+        assert!(validate_structured_output(&valid, &schema).is_ok());
+
+        let invalid_missing = serde_json::json!({
+            "severity": "P1"
+        });
+        let err_missing = validate_structured_output(&invalid_missing, &schema).unwrap_err();
+        assert!(!err_missing.is_empty());
+
+        let invalid_enum = serde_json::json!({
+            "severity": "CRITICAL",
+            "auto_fixed": true
+        });
+        let err_enum = validate_structured_output(&invalid_enum, &schema).unwrap_err();
+        assert!(!err_enum.is_empty());
     }
 }

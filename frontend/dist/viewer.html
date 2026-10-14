@@ -7930,6 +7930,7 @@ function ViewerApp() {
   const [output, setOutput] = reactExports.useState(null);
   const [executionId, setExecutionId] = reactExports.useState("default");
   const [activeInteraction, setActiveInteraction] = reactExports.useState(null);
+  const lastInteractionRef = reactExports.useRef(null);
   const [liveReasoning, setLiveReasoning] = reactExports.useState("");
   const [liveContent, setLiveContent] = reactExports.useState("");
   const [executingTool, setExecutingTool] = reactExports.useState(null);
@@ -7987,6 +7988,7 @@ function ViewerApp() {
         }
       },
       onStreamMessage: (msg) => {
+        var _a2;
         setHasStartedExecution(true);
         ensureDraftOutput();
         if (msg.kind === "reasoning" || typeof msg.delta_reasoning === "string") {
@@ -8012,13 +8014,13 @@ function ViewerApp() {
         } else if (msg.type === "tool_end") {
           setExecutingTool(null);
           setCompletedLiveTools((prev) => {
-            var _a2;
+            var _a3;
             return [
               ...prev,
               {
                 tool_id: msg.tool_id || "",
                 tool_name: msg.tool_name || msg.tool_id || "tool",
-                success: (_a2 = msg.success) != null ? _a2 : true,
+                success: (_a3 = msg.success) != null ? _a3 : true,
                 output: msg.output,
                 error: msg.error,
                 duration_ms: msg.duration_ms || 0
@@ -8028,30 +8030,34 @@ function ViewerApp() {
         }
         if (msg.type === "waiting_human" && msg.interaction) {
           setActiveInteraction(msg.interaction);
+          lastInteractionRef.current = msg.interaction;
           if (msg.interaction.execution_id) {
             setExecutionId(msg.interaction.execution_id);
           }
           setHumanInputText("");
           setRejectReasonText("");
         } else if (msg.type === "human_resumed") {
-          if (activeInteraction && msg.response) {
-            const respText = msg.response.text || (msg.response.approved !== void 0 ? msg.response.approved ? t("已批准操作", "Approved") : t("已拒绝操作", "Rejected") : t("已确认", "Confirmed"));
-            setRecentInteractions((prev) => {
-              var _a2;
-              return [
-                ...prev,
-                {
-                  interaction_id: activeInteraction.interaction_id,
-                  interaction_type: activeInteraction.interaction_type || "ask_human",
-                  prompt: activeInteraction.prompt,
-                  tool_name: activeInteraction.tool_name,
-                  user_response: respText,
-                  approved: (_a2 = msg.response) == null ? void 0 : _a2.approved,
-                  timestamp: Date.now()
-                }
-              ];
-            });
-          }
+          const interaction = activeInteraction || lastInteractionRef.current;
+          const msgObj = msg;
+          const userAns = msgObj.user_answer || msg.response && msg.response.text;
+          const respText = typeof userAns === "string" && userAns.trim() ? userAns : ((_a2 = msg.response) == null ? void 0 : _a2.approved) !== void 0 ? msg.response.approved ? t("已批准操作", "Approved") : t("已拒绝操作", "Rejected") : msgObj.action ? String(msgObj.action) : t("已确认", "Confirmed");
+          const promptText = (interaction == null ? void 0 : interaction.prompt) || (typeof msgObj.prompt === "string" ? msgObj.prompt : t("人机交互", "Human Interaction"));
+          const toolName = (interaction == null ? void 0 : interaction.tool_name) || (typeof msgObj.tool_name === "string" ? msgObj.tool_name : void 0);
+          setRecentInteractions((prev) => {
+            var _a3;
+            return [
+              ...prev,
+              {
+                interaction_id: msg.interaction_id || (interaction == null ? void 0 : interaction.interaction_id) || "interaction",
+                interaction_type: (interaction == null ? void 0 : interaction.interaction_type) || "ask_human",
+                prompt: promptText,
+                tool_name: toolName,
+                user_response: respText,
+                approved: (_a3 = msg.response) == null ? void 0 : _a3.approved,
+                timestamp: Date.now()
+              }
+            ];
+          });
           setActiveInteraction(null);
         }
         if (msg.type === "interrupted" && typeof msg.text === "string") {
@@ -8107,8 +8113,8 @@ function ViewerApp() {
             };
             const existingIdx = current.timeline.findIndex(
               (s) => {
-                var _a2;
-                return s.step_index === ((_a2 = msg.step) == null ? void 0 : _a2.step_index);
+                var _a3;
+                return s.step_index === ((_a3 = msg.step) == null ? void 0 : _a3.step_index);
               }
             );
             let nextTimeline;

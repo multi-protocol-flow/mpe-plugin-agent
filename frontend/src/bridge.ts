@@ -1,5 +1,7 @@
 import type {
   HumanResponse,
+  MpeDataItem,
+  MpeDatasourceListResult,
   PluginIframeInitPayload,
   PluginIframeNodeSnapshot,
   StreamMessagePayload,
@@ -106,6 +108,32 @@ export function submitHumanResponse(interactionId: string, response: HumanRespon
 
 export function interruptAgent(executionId: string, text: string): Promise<unknown> {
   return uiCall('interrupt_agent', { execution_id: executionId, text });
+}
+
+export function listMpeDatasources(): Promise<MpeDatasourceListResult> {
+  return requestAction('listDatasources', {}) as Promise<MpeDatasourceListResult>;
+}
+
+export function browseMpeDatasource(
+  connectionId: string,
+  resourceId = 'api',
+  parentId: string | null = null
+): Promise<MpeDataItem[]> {
+  return requestAction('browseDatasource', {
+    connection_id: connectionId,
+    resource_id: resourceId,
+    parent_id: parentId,
+  }) as Promise<MpeDataItem[]>;
+}
+
+export function getMpeDatasourceTemplates(
+  connectionId: string,
+  itemIds: string[]
+): Promise<Array<{ type_id: string; name: string; data: Record<string, unknown> }>> {
+  return requestAction('getDatasourceTemplates', {
+    connection_id: connectionId,
+    item_ids: itemIds,
+  }) as Promise<Array<{ type_id: string; name: string; data: Record<string, unknown> }>>;
 }
 
 let configTimer: number | null = null;

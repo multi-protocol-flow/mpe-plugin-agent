@@ -23,6 +23,45 @@ export interface PluginIframeInitPayload {
   reportData?: unknown;
 }
 
+export interface MpeDatasourceConnection {
+  id: string;
+  datasource_id: string;
+  display_name: string;
+  name?: string;
+  created_at: string;
+}
+
+export interface MpeDatasourceResource {
+  id: string;
+  label: string;
+  children?: string | null;
+  leaf: boolean;
+}
+
+export interface MpeDatasourceDescription {
+  id: string;
+  display_name: string;
+  auth: { type: string };
+  resources: MpeDatasourceResource[];
+}
+
+export interface MpeDatasourceListResult {
+  connections: MpeDatasourceConnection[];
+  descriptions: MpeDatasourceDescription[];
+}
+
+export interface MpeDataItem {
+  id: string;
+  name: string;
+  protocol?: string;
+  method?: string | null;
+  path?: string | null;
+  summary?: string | null;
+  extra?: Array<{ label: string; value: string }>;
+  raw?: Record<string, unknown>;
+  selected?: boolean;
+}
+
 export interface LlmProviderConfig {
   base_url: string;
   api_key?: string;
@@ -61,6 +100,9 @@ export interface AgentReactConfig {
   step_by_step?: boolean;
   interaction_timeout_secs?: number;
   mock_human_response?: string;
+  structured_output_enabled?: boolean;
+  structured_output_schema?: Record<string, unknown>;
+  export_variables?: boolean;
 }
 
 export interface TokenUsage {
@@ -148,4 +190,6 @@ export interface AgentReactOutput {
   token_usage: TokenUsage;
   total_duration_ms: number;
   timeline: TimelineStep[];
+  structured_output?: Record<string, unknown>;
+  structured_output_errors?: string[];
 }

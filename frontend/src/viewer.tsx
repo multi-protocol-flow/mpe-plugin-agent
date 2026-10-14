@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { initBridge, interruptAgent, postResize, submitHumanResponse } from './bridge';
 import { t } from './i18n';
@@ -97,6 +97,7 @@ function ViewerApp() {
   const [output, setOutput] = useState<AgentReactOutput | null>(null);
   const [executionId, setExecutionId] = useState<string>('default');
   const [activeInteraction, setActiveInteraction] = useState<PendingInteraction | null>(null);
+  const lastInteractionRef = useRef<PendingInteraction | null>(null);
   const [liveReasoning, setLiveReasoning] = useState<string>('');
   const [liveContent, setLiveContent] = useState<string>('');
   const [executingTool, setExecutingTool] = useState<{
@@ -229,33 +230,48 @@ function ViewerApp() {
         // 3. Human in the Loop (HITL) Interruption / Interaction
         if (msg.type === 'waiting_human' && msg.interaction) {
           setActiveInteraction(msg.interaction);
+          lastInteractionRef.current = msg.interaction;
           if (msg.interaction.execution_id) {
             setExecutionId(msg.interaction.execution_id);
           }
           setHumanInputText('');
           setRejectReasonText('');
         } else if (msg.type === 'human_resumed') {
-          if (activeInteraction && msg.response) {
-            const respText =
-              msg.response.text ||
-              (msg.response.approved !== undefined
-                ? msg.response.approved
-                  ? t('已批准操作', 'Approved')
-                  : t('已拒绝操作', 'Rejected')
-                : t('已确认', 'Confirmed'));
-            setRecentInteractions((prev) => [
-              ...prev,
-              {
-                interaction_id: activeInteraction.interaction_id,
-                interaction_type: activeInteraction.interaction_type || 'ask_human',
-                prompt: activeInteraction.prompt,
-                tool_name: activeInteraction.tool_name,
-                user_response: respText,
-                approved: msg.response?.approved,
-                timestamp: Date.now(),
-              },
-            ]);
-          }
+          const interaction = activeInteraction || lastInteractionRef.current;
+          const msgObj = msg as Record<string, unknown>;
+          const userAns =
+            msgObj.user_answer ||
+            (msg.response && msg.response.text);
+          const respText =
+            typeof userAns === 'string' && userAns.trim()
+              ? userAns
+              : msg.response?.approved !== undefined
+              ? msg.response.approved
+                ? t('已批准操作', 'Approved')
+                : t('已拒绝操作', 'Rejected')
+              : msgObj.action
+              ? String(msgObj.action)
+              : t('已确认', 'Confirmed');
+
+          const promptText =
+            interaction?.prompt ||
+            (typeof msgObj.prompt === 'string' ? msgObj.prompt : t('人机交互', 'Human Interaction'));
+          const toolName =
+            interaction?.tool_name ||
+            (typeof msgObj.tool_name === 'string' ? msgObj.tool_name : undefined);
+
+          setRecentInteractions((prev) => [
+            ...prev,
+            {
+              interaction_id: msg.interaction_id || interaction?.interaction_id || 'interaction',
+              interaction_type: interaction?.interaction_type || 'ask_human',
+              prompt: promptText,
+              tool_name: toolName,
+              user_response: respText,
+              approved: msg.response?.approved,
+              timestamp: Date.now(),
+            },
+          ]);
           setActiveInteraction(null);
         }
         // 3.5 Interrupted event

@@ -12,10 +12,11 @@ use crate::client::{
 };
 use crate::types::{
     ask_human_tool_definition, audit_tool_call_safety, clear_execution_interactions,
-    drain_interruptions, merge_tool_config, next_interaction_id, register_interaction,
-    tool_to_openai_function, AgentReactConfig, AgentReactOutput, AgentToolDefinition, ChatMessage,
-    HumanResponse, LlmProviderConfig, PendingInteraction, TimelineStep, TimelineToolCall,
-    TokenUsage,
+    drain_interruptions, extract_json_from_text, merge_tool_config, next_interaction_id,
+    register_interaction, tool_to_openai_function, truncate_error_message, truncate_tool_output,
+    validate_structured_output, AgentReactConfig, AgentReactOutput, AgentToolDefinition,
+    ChatMessage, HumanResponse, LlmProviderConfig, PendingInteraction, TimelineStep,
+    TimelineToolCall, TokenUsage,
 };
 
 /// Tool execution dispatcher interface.
@@ -450,7 +451,16 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
 
     // Prepare initial conversation history
     let mut messages: Vec<ChatMessage> = Vec::new();
-    let sys_prompt = config.system_prompt.trim();
+    let mut sys_prompt = config.system_prompt.trim().to_string();
+    if config.structured_output_enabled {
+        if let Some(schema) = &config.structured_output_schema {
+            let schema_json =
+                serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+            sys_prompt.push_str(&format!(
+                "\n\n[MANDATORY OUTPUT FORMAT]\nWhen you have concluded all necessary tool actions and are ready to output your final answer, you MUST respond ONLY with a valid JSON object matching this JSON Schema:\n{schema_json}\nDo NOT wrap the JSON in Markdown backticks or commentary."
+            ));
+        }
+    }
     if !sys_prompt.is_empty() {
         messages.push(ChatMessage::system(sys_prompt));
     }
@@ -462,6 +472,8 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
     let mut previous_round_had_error = false;
     let mut final_answer = String::new();
     let mut converged = false;
+    let mut final_structured_output: Option<serde_json::Value> = None;
+    let mut final_structured_errors: Option<Vec<String>> = None;
     let mut paused_total_duration = Duration::ZERO;
     let mut step_by_step_active = config.step_by_step;
 
@@ -639,6 +651,8 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
                                 .saturating_sub(paused_total_duration)
                                 .as_millis() as u64,
                             timeline,
+                            structured_output: None,
+                            structured_output_errors: None,
                         })
                         .unwrap_or_default(),
                     ),
@@ -654,36 +668,186 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
 
         // Case A: Model decided NOT to call any tools (Converged to final answer)
         if llm_res.tool_calls.is_empty() {
-            final_answer = llm_res.content.clone().unwrap_or_default();
-            converged = true;
+            let candidate_answer = llm_res.content.clone().unwrap_or_default();
 
-            timeline.push(TimelineStep {
-                step_index: round,
-                step_type: "final_answer".to_string(),
-                thought: llm_res.reasoning_content,
-                tool_calls: Vec::new(),
-                duration_ms: llm_res.duration_ms,
-                self_correction: previous_round_had_error,
-                tokens: llm_res.token_usage,
-                human_interaction: None,
-                human_response: None,
-            });
+            if config.structured_output_enabled {
+                if let Some(schema) = &config.structured_output_schema {
+                    let parsed_opt = extract_json_from_text(&candidate_answer);
+                    let validation_res = match &parsed_opt {
+                        Some(val) => validate_structured_output(val, schema),
+                        None => Err(vec!["Output is not valid JSON".to_string()]),
+                    };
 
-            ctx.log(
-                "info",
-                format!("Agent converged in round {round} with final answer"),
-            );
-            ctx.emit(
-                "stream",
-                serde_json::json!({
-                    "type": "converged",
-                    "final_answer": &final_answer,
-                    "iterations": round,
-                    "step_index": round,
-                }),
-            )
-            .await;
-            break;
+                    match validation_res {
+                        Ok(()) => {
+                            let parsed_val = parsed_opt.unwrap_or_default();
+                            final_answer = candidate_answer;
+                            final_structured_output = Some(parsed_val.clone());
+                            converged = true;
+
+                            if config.export_variables {
+                                if let Some(obj) = parsed_val.as_object() {
+                                    for (k, v) in obj {
+                                        if !k.contains('.') {
+                                            ctx.set_variable(k.clone(), v.clone());
+                                        }
+                                    }
+                                }
+                            }
+
+                            timeline.push(TimelineStep {
+                                step_index: round,
+                                step_type: "final_answer".to_string(),
+                                thought: llm_res.reasoning_content,
+                                tool_calls: Vec::new(),
+                                duration_ms: llm_res.duration_ms,
+                                self_correction: previous_round_had_error,
+                                tokens: llm_res.token_usage,
+                                human_interaction: None,
+                                human_response: None,
+                            });
+
+                            ctx.log(
+                                "info",
+                                format!("Agent converged in round {round} with structured output"),
+                            );
+                            ctx.emit(
+                                "stream",
+                                serde_json::json!({
+                                    "type": "converged",
+                                    "final_answer": &final_answer,
+                                    "structured_output": &parsed_val,
+                                    "iterations": round,
+                                    "step_index": round,
+                                }),
+                            )
+                            .await;
+                            break;
+                        }
+                        Err(errors) => {
+                            let error_details = errors.join("; ");
+                            self_corrections_count += 1;
+                            previous_round_had_error = true;
+
+                            if round < config.max_iterations {
+                                ctx.log(
+                                    "warn",
+                                    format!("Structured output validation failed in round {round}: {error_details}. Driving self-correction."),
+                                );
+                                timeline.push(TimelineStep {
+                                    step_index: round,
+                                    step_type: "self_correction".to_string(),
+                                    thought: llm_res.reasoning_content.clone(),
+                                    tool_calls: Vec::new(),
+                                    duration_ms: llm_res.duration_ms,
+                                    self_correction: true,
+                                    tokens: llm_res.token_usage,
+                                    human_interaction: None,
+                                    human_response: None,
+                                });
+
+                                ctx.emit(
+                                    "stream",
+                                    serde_json::json!({
+                                        "type": "self_correction",
+                                        "error": &error_details,
+                                        "iterations": round,
+                                        "step_index": round,
+                                    }),
+                                )
+                                .await;
+
+                                messages.push(ChatMessage::assistant_text(
+                                    candidate_answer,
+                                    llm_res.reasoning_content,
+                                ));
+                                messages.push(ChatMessage::user(format!(
+                                    "Structured Output Validation Failed: {error_details}. Please correct your response and output strictly conforming JSON."
+                                )));
+                                continue;
+                            } else {
+                                ctx.log(
+                                    "error",
+                                    format!("Structured output validation failed on final round {round}: {error_details}"),
+                                );
+                                timeline.push(TimelineStep {
+                                    step_index: round,
+                                    step_type: "error".to_string(),
+                                    thought: llm_res.reasoning_content,
+                                    tool_calls: Vec::new(),
+                                    duration_ms: llm_res.duration_ms,
+                                    self_correction: true,
+                                    tokens: llm_res.token_usage,
+                                    human_interaction: None,
+                                    human_response: None,
+                                });
+                                final_structured_output = None;
+                                final_structured_errors = Some(errors);
+                                converged = false;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    final_answer = candidate_answer;
+                    converged = true;
+                    timeline.push(TimelineStep {
+                        step_index: round,
+                        step_type: "final_answer".to_string(),
+                        thought: llm_res.reasoning_content,
+                        tool_calls: Vec::new(),
+                        duration_ms: llm_res.duration_ms,
+                        self_correction: previous_round_had_error,
+                        tokens: llm_res.token_usage,
+                        human_interaction: None,
+                        human_response: None,
+                    });
+                    ctx.log(
+                        "info",
+                        format!("Agent converged in round {round} with final answer"),
+                    );
+                    ctx.emit(
+                        "stream",
+                        serde_json::json!({
+                            "type": "converged",
+                            "final_answer": &final_answer,
+                            "iterations": round,
+                            "step_index": round,
+                        }),
+                    )
+                    .await;
+                    break;
+                }
+            } else {
+                final_answer = candidate_answer;
+                converged = true;
+                timeline.push(TimelineStep {
+                    step_index: round,
+                    step_type: "final_answer".to_string(),
+                    thought: llm_res.reasoning_content,
+                    tool_calls: Vec::new(),
+                    duration_ms: llm_res.duration_ms,
+                    self_correction: previous_round_had_error,
+                    tokens: llm_res.token_usage,
+                    human_interaction: None,
+                    human_response: None,
+                });
+                ctx.log(
+                    "info",
+                    format!("Agent converged in round {round} with final answer"),
+                );
+                ctx.emit(
+                    "stream",
+                    serde_json::json!({
+                        "type": "converged",
+                        "final_answer": &final_answer,
+                        "iterations": round,
+                        "step_index": round,
+                    }),
+                )
+                .await;
+                break;
+            }
         }
 
         let is_self_correction_round = previous_round_had_error;
@@ -815,9 +979,12 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
                     serde_json::json!({
                         "type": "human_resumed",
                         "interaction_id": &interaction_id,
+                        "prompt": &pending.prompt,
+                        "tool_name": &pending.tool_name,
                         "response": &human_resp,
+                        "user_answer": &user_answer,
                         "step_index": round,
-                    }),
+                    })
                 )
                 .await;
 
@@ -1016,9 +1183,12 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
                                     serde_json::json!({
                                         "type": "human_resumed",
                                         "interaction_id": &interaction_id,
+                                        "prompt": &pending.prompt,
+                                        "tool_name": &tool.name,
                                         "response": &human_resp,
+                                        "approved": human_resp.approved,
                                         "step_index": round,
-                                    }),
+                                    })
                                 )
                                 .await;
 
@@ -1164,9 +1334,10 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
                                             let err_str = t_err.unwrap_or_else(|| {
                                                 "Tool execution failed".to_string()
                                             });
+                                            let truncated_err = truncate_error_message(&err_str, 1000);
                                             messages.push(ChatMessage::tool_result(
                                                 &tc.id,
-                                                format!("Tool Execution Error: {err_str}"),
+                                                format!("Tool Execution Error: {truncated_err}"),
                                             ));
 
                                             step_tool_calls.push(TimelineToolCall {
@@ -1186,15 +1357,10 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
                                             let out_val = t_out.unwrap_or_else(
                                                 || serde_json::json!({ "status": "ok" }),
                                             );
-                                            let out_str = out_val.to_string();
-                                            let safe_out_str = if out_str.trim().is_empty() {
-                                                "{\"status\":\"ok\"}".to_string()
-                                            } else {
-                                                out_str
-                                            };
+                                            let truncated_output = truncate_tool_output(&out_val, 4000);
                                             messages.push(ChatMessage::tool_result(
                                                 &tc.id,
-                                                safe_out_str,
+                                                truncated_output,
                                             ));
 
                                             step_tool_calls.push(TimelineToolCall {
@@ -1338,9 +1504,11 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
                 serde_json::json!({
                     "type": "human_resumed",
                     "interaction_id": &interaction_id,
+                    "prompt": &pending.prompt,
                     "response": &human_resp,
+                    "action": &human_resp.action,
                     "step_index": round,
-                }),
+                })
             )
             .await;
 
@@ -1363,6 +1531,8 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
         success: converged,
         final_answer: if converged {
             final_answer
+        } else if let Some(errs) = &final_structured_errors {
+            format!("Structured output validation failed: {}", errs.join("; "))
         } else {
             "Reached maximum iterations without convergence".to_string()
         },
@@ -1372,14 +1542,21 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
         token_usage: total_token_usage,
         total_duration_ms,
         timeline,
+        structured_output: final_structured_output.clone(),
+        structured_output_errors: final_structured_errors.clone(),
     };
 
-    let output_val = match serde_json::to_value(&output) {
+    let mut output_val = match serde_json::to_value(&output) {
         Ok(v) => v,
         Err(e) => return ExecuteResult::fail(format!("Failed to serialize agent output: {e}")),
     };
 
     if converged {
+        if let Some(parsed) = &final_structured_output {
+            if let Some(obj) = output_val.as_object_mut() {
+                obj.insert("data".to_string(), parsed.clone());
+            }
+        }
         ExecuteResult {
             success: true,
             next_ports: vec!["true".to_string()],
@@ -1388,11 +1565,16 @@ pub async fn execute_react(ctx: &mut ExecuteContext, pool: &Arc<ConnectionPool>)
             report_data: Some(output_val),
         }
     } else {
+        let err_list = if let Some(errs) = final_structured_errors {
+            errs
+        } else {
+            vec!["Reached maximum iterations without convergence".to_string()]
+        };
         ExecuteResult {
             success: false,
             next_ports: vec!["false".to_string()],
             output_data: Some(output_val.clone()),
-            errors: vec!["Reached maximum iterations without convergence".to_string()],
+            errors: err_list,
             report_data: Some(output_val),
         }
     }

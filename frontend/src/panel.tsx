@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  browseMpeDatasource,
   getRegisteredNodes,
   initBridge,
+  listMpeDatasources,
   notifyConfig,
   postResize,
   uiCall,
@@ -10,6 +12,7 @@ import {
 import { t } from './i18n';
 import {
   IconBot,
+  IconBraces,
   IconBrain,
   IconClock,
   IconFolder,
@@ -30,6 +33,7 @@ import type {
   AgentReactConfig,
   AgentToolDefinition,
   LlmProviderConfig,
+  MpeDatasourceConnection,
   PluginIframeNodeSnapshot,
 } from './types';
 
@@ -341,7 +345,7 @@ const PROTOCOL_PALETTE: PaletteItem[] = [
     defaultFixedConfig: { target_flow_path: '' },
   },
 ];
-const DATASOURCE_PRESETS: Record<
+const DATASOURCE_DEMO_PRESETS: Record<
   string,
   {
     nameZh: string;
@@ -512,6 +516,305 @@ const DATASOURCE_PRESETS: Record<
   },
 };
 
+const STRUCTURED_OUTPUT_PRESETS: Record<
+  string,
+  { labelZh: string; labelEn: string; schema: Record<string, unknown> }
+> = {
+  sre_diagnosis: {
+    labelZh: 'SRE 故障根因诊断 (SRE Diagnosis)',
+    labelEn: 'SRE Root Cause Diagnosis',
+    schema: {
+      type: 'object',
+      properties: {
+        severity: {
+          type: 'string',
+          enum: ['P0', 'P1', 'P2', 'P3'],
+          description: '故障严重程度等级',
+        },
+        root_cause: {
+          type: 'string',
+          description: '系统异常根因诊断分析结论',
+        },
+        auto_fixed: {
+          type: 'boolean',
+          description: '是否已通过自治工具尝试完成修复',
+        },
+        recommendation: {
+          type: 'string',
+          description: '运维工程师后续跟进与防御建议',
+        },
+      },
+      required: ['severity', 'root_cause', 'auto_fixed', 'recommendation'],
+    },
+  },
+  api_test_eval: {
+    labelZh: 'API 自动化测试评估 (API Test Evaluation)',
+    labelEn: 'API Test Evaluation',
+    schema: {
+      type: 'object',
+      properties: {
+        pass: {
+          type: 'boolean',
+          description: '全流程接口测试评估是否通过',
+        },
+        total_checked: {
+          type: 'integer',
+          description: '执行校验的接口/断言项总数',
+        },
+        failed_assertions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '未通过的断言或错误信息列表',
+        },
+        summary: {
+          type: 'string',
+          description: '本次自动化测试执行评估总结',
+        },
+      },
+      required: ['pass', 'total_checked', 'failed_assertions', 'summary'],
+    },
+  },
+  metric_extract: {
+    labelZh: '业务指标数据提炼 (Metric Extraction)',
+    labelEn: 'Metric Extraction',
+    schema: {
+      type: 'object',
+      properties: {
+        metric_name: {
+          type: 'string',
+          description: '提取的业务核心度量指标标识',
+        },
+        value: {
+          type: 'number',
+          description: '当前计算或查询得到的最新指标数值',
+        },
+        trend: {
+          type: 'string',
+          enum: ['up', 'down', 'stable'],
+          description: '相较历史或预期的指标趋势',
+        },
+        confidence: {
+          type: 'number',
+          description: '推断置信度评分 (0.0 到 1.0)',
+        },
+      },
+      required: ['metric_name', 'value', 'trend', 'confidence'],
+    },
+  },
+};
+
+function inferToolFromCanvasNode(node: PluginIframeNodeSnapshot): AgentToolDefinition {
+  const rawLabel = (node.label || node.name || '').trim();
+  const nodeType = node.type || '';
+  const nodeCfg = (node.config || {}) as Record<string, unknown>;
+  const basePrefix = nodeType.replace(/[:\-]/g, '_').toLowerCase();
+  const shortId = node.uuid.slice(-4).toLowerCase();
+
+  const sanitizedId = `${basePrefix}_${shortId}`.replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
+  const rawNameCandidate = rawLabel
+    ? rawLabel.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+    : '';
+  const toolName = (rawNameCandidate || sanitizedId).slice(0, 64);
+
+  let fixedConfig: Record<string, unknown> = {};
+  let dynamicSchema: Record<string, unknown> = {
+    type: 'object',
+    properties: {},
+  };
+  let description = `Call canvas node '${rawLabel || node.uuid}' (${nodeType})`;
+
+  if (nodeType.startsWith('http:request')) {
+    const url = String(nodeCfg.url || '');
+    const method = String(nodeCfg.method || 'GET').toUpperCase();
+    fixedConfig = {
+      url: nodeCfg.url,
+      method: nodeCfg.method || 'GET',
+      headers: nodeCfg.headers || {},
+      timeout_ms: nodeCfg.timeout_ms || 30000,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        query_params: { type: 'object', description: 'Query parameters' },
+        body: { type: 'object', description: 'Dynamic request body payload' },
+        headers: { type: 'object', description: 'Optional dynamic headers override' },
+        path: { type: 'string', description: 'Relative path or endpoint to append' },
+      },
+    };
+    description = `Send HTTP ${method} request to ${url || 'endpoint'}. Allows overriding dynamic body, query params or path.`;
+  } else if (nodeType.startsWith('db:query') || nodeType.startsWith('db:') || nodeType === 'sql') {
+    fixedConfig = {
+      connection_uuid: nodeCfg.connection_uuid,
+      timeout_ms: nodeCfg.timeout_ms || 30000,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'SQL query statement' },
+      },
+      required: ['sql'],
+    };
+    description = `Execute SQL query on database '${rawLabel || node.uuid}'. Parameter: sql query statement.`;
+  } else if (nodeType.startsWith('redis:cmd') || nodeType.startsWith('redis:')) {
+    fixedConfig = {
+      connection_uuid: nodeCfg.connection_uuid,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Redis command name (e.g. GET)' },
+        args: { type: 'string', description: 'JSON array of arguments, e.g. ["key"]' },
+      },
+      required: ['command'],
+    };
+    description = `Execute Redis command on cluster '${rawLabel || node.uuid}'. Parameters: command and args array.`;
+  } else if (nodeType.startsWith('kafka:produce')) {
+    const topic = String(nodeCfg.topic || 'default');
+    const connId = nodeCfg.connection_id || nodeCfg.connection_uuid;
+    fixedConfig = {
+      connection_id: connId,
+      connection_uuid: connId,
+      topic: nodeCfg.topic,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Message payload (string or object)' },
+        key: { type: 'string', description: 'Optional message key' },
+        topic: { type: 'string', description: 'Optional topic override' },
+      },
+      required: ['message'],
+    };
+    description = `Publish message to Kafka topic '${topic}'.`;
+  } else if (nodeType.startsWith('kafka:consume')) {
+    const topic = String(nodeCfg.topic || 'default');
+    const connId = nodeCfg.connection_id || nodeCfg.connection_uuid;
+    fixedConfig = {
+      connection_id: connId,
+      connection_uuid: connId,
+      topic: nodeCfg.topic,
+      group_id: nodeCfg.group_id,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        max_messages: { type: 'integer', description: 'Maximum messages to consume' },
+        timeout_ms: { type: 'integer', description: 'Timeout in milliseconds' },
+      },
+    };
+    description = `Consume messages from Kafka topic '${topic}'.`;
+  } else if (nodeType.startsWith('grpc:call') || nodeType.startsWith('grpc:')) {
+    const service = String(nodeCfg.service_name || nodeCfg.service || '');
+    const method = String(nodeCfg.method_name || nodeCfg.method || '');
+    const connId = nodeCfg.connection_id || nodeCfg.connection_uuid;
+    fixedConfig = {
+      connection_id: connId,
+      connection_uuid: connId,
+      endpoint: nodeCfg.endpoint,
+      proto_file: nodeCfg.proto_file,
+      service_name: service,
+      method_name: method,
+      service,
+      method,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        payload: { type: 'object', description: 'Payload JSON object' },
+      },
+      required: ['payload'],
+    };
+    description = `Invoke gRPC method '${service}/${method}'. Parameter: payload JSON object.`;
+  } else if (nodeType.startsWith('tcp:send') || nodeType.startsWith('tcp:')) {
+    const connId = nodeCfg.connection_id || nodeCfg.connection_uuid;
+    fixedConfig = {
+      connection_id: connId,
+      connection_uuid: connId,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        data: { type: 'string', description: 'Raw TCP payload string' },
+      },
+      required: ['data'],
+    };
+    description = `Send raw TCP payload.`;
+  } else if (nodeType.startsWith('ws:send_collect') || nodeType.startsWith('ws:')) {
+    const connId = nodeCfg.connection_id || nodeCfg.connection_uuid;
+    fixedConfig = {
+      connection_id: connId,
+      connection_uuid: connId,
+      timeout_ms: nodeCfg.timeout_ms || 10000,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'WebSocket message string' },
+      },
+      required: ['message'],
+    };
+    description = `Send WebSocket message and collect responses.`;
+  } else if (nodeType === 'flow:sub' || nodeType === 'subflow') {
+    const subflowPath = String(nodeCfg.target_flow_path || nodeCfg.subflow_path || nodeCfg.path || '');
+    const targetFlowId = String(nodeCfg.target_flow_id || '');
+    fixedConfig = {
+      target_flow_path: subflowPath,
+      subflow_path: subflowPath,
+      ...(targetFlowId ? { target_flow_id: targetFlowId } : {}),
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        variables: { type: 'object', description: 'Subflow input variables object' },
+      },
+    };
+    description = `Execute nested composite subflow '${rawLabel || subflowPath}'.`;
+  } else if (nodeType.startsWith('mcp:call_tool') || nodeType.startsWith('mcp:')) {
+    fixedConfig = {
+      server_uuid: nodeCfg.server_uuid,
+    };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        tool_name: { type: 'string', description: 'MCP tool name' },
+        arguments: { type: 'object', description: 'Arguments object' },
+      },
+    };
+    description = `Call MCP tool via MCP server '${rawLabel || node.uuid}'.`;
+  } else {
+    const genericFixed: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(nodeCfg)) {
+      if (
+        k.includes('uuid') ||
+        k.includes('connection') ||
+        k.includes('endpoint') ||
+        k.includes('token') ||
+        k.includes('key')
+      ) {
+        genericFixed[k] = v;
+      }
+    }
+    fixedConfig = Object.keys(genericFixed).length > 0 ? genericFixed : { ...nodeCfg };
+    dynamicSchema = {
+      type: 'object',
+      properties: {
+        payload: { type: 'object', description: 'Execution payload' },
+      },
+    };
+    description = `Execute ${nodeType} action on '${rawLabel || node.uuid}'.`;
+  }
+
+  return {
+    id: sanitizedId,
+    name: toolName,
+    description,
+    tool_type: 'linked_node',
+    target_node_type: node.type,
+    target_node_id: node.uuid,
+    fixed_config: fixedConfig,
+    dynamic_schema: dynamicSchema,
+  };
+}
 
 const DEFAULT_CONFIG: AgentReactConfig = {
   provider_uuid: '',
@@ -533,6 +836,9 @@ const DEFAULT_CONFIG: AgentReactConfig = {
   stream: true,
   enable_ask_human: true,
   step_by_step: false,
+  structured_output_enabled: false,
+  structured_output_schema: undefined,
+  export_variables: true,
 };
 
 function PanelApp() {
@@ -551,7 +857,10 @@ function PanelApp() {
   const [selectedPreset, setSelectedPreset] = useState<string>('openai');
   const [showAddToolModal, setShowAddToolModal] = useState<boolean>(false);
   const [activePaletteTab, setActivePaletteTab] = useState<'palette' | 'canvas' | 'datasource'>('palette');
-  const [selectedDatasource, setSelectedDatasource] = useState<string>('petstore_openapi');
+  const [selectedDatasourceKey, setSelectedDatasourceKey] = useState<string>('preset:petstore_openapi');
+  const [mpeConnections, setMpeConnections] = useState<MpeDatasourceConnection[]>([]);
+  const [loadingMpeDatasources, setLoadingMpeDatasources] = useState<boolean>(false);
+  const [convertingDatasource, setConvertingDatasource] = useState<boolean>(false);
   const [datasourceBaseUrl, setDatasourceBaseUrl] = useState<string>('https://petstore.swagger.io/v2');
   const [datasourceEndpoints, setDatasourceEndpoints] = useState<
     Array<{
@@ -564,18 +873,109 @@ function PanelApp() {
       raw: Record<string, unknown>;
     }>
   >(() => {
-    const preset = DATASOURCE_PRESETS['petstore_openapi'];
+    const preset = DATASOURCE_DEMO_PRESETS['petstore_openapi'];
     return preset ? preset.items.map((it) => ({ ...it, selected: true })) : [];
   });
-  const [convertingDatasource, setConvertingDatasource] = useState<boolean>(false);
   const [mountedSuccessMsg, setMountedSuccessMsg] = useState<string | null>(null);
 
-  const handleSelectDatasourcePreset = (key: string) => {
-    setSelectedDatasource(key);
-    const preset = DATASOURCE_PRESETS[key];
-    if (preset) {
-      setDatasourceBaseUrl(preset.defaultBaseUrl);
-      setDatasourceEndpoints(preset.items.map((it) => ({ ...it, selected: true })));
+  const [newFieldName, setNewFieldName] = useState('');
+  const [newFieldType, setNewFieldType] = useState('string');
+  const [newFieldRequired, setNewFieldRequired] = useState(true);
+  const handleAddSchemaField = () => {
+    const field = newFieldName.trim();
+    if (!field) return;
+
+    setConfig((prev) => {
+      const currentSchema = (prev.structured_output_schema && typeof prev.structured_output_schema === 'object'
+        ? JSON.parse(JSON.stringify(prev.structured_output_schema))
+        : { type: 'object', properties: {}, required: [] }) as {
+        type?: string;
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+
+      currentSchema.type = currentSchema.type || 'object';
+      currentSchema.properties = currentSchema.properties || {};
+      currentSchema.properties[field] = {
+        type: newFieldType,
+        description: `Field ${field}`,
+      };
+
+      if (newFieldRequired) {
+        currentSchema.required = currentSchema.required || [];
+        if (!currentSchema.required.includes(field)) {
+          currentSchema.required.push(field);
+        }
+      }
+
+      return {
+        ...prev,
+        structured_output_schema: currentSchema,
+      };
+    });
+
+    setNewFieldName('');
+  };
+  const loadMpeDatasources = async () => {
+    setLoadingMpeDatasources(true);
+    try {
+      const res = await listMpeDatasources();
+      if (res && Array.isArray(res.connections)) {
+        setMpeConnections(res.connections);
+        if (res.connections.length > 0 && selectedDatasourceKey.startsWith('preset:')) {
+          const first = res.connections[0];
+          setSelectedDatasourceKey(`mpe:${first.id}`);
+          void handleSelectDatasource(`mpe:${first.id}`);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to list MPE datasources:', err);
+    } finally {
+      setLoadingMpeDatasources(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showAddToolModal && activePaletteTab === 'datasource') {
+      void loadMpeDatasources();
+    }
+  }, [showAddToolModal, activePaletteTab]);
+
+  const handleSelectDatasource = async (key: string) => {
+    setSelectedDatasourceKey(key);
+    if (key.startsWith('preset:')) {
+      const presetKey = key.replace('preset:', '');
+      const preset = DATASOURCE_DEMO_PRESETS[presetKey];
+      if (preset) {
+        setDatasourceBaseUrl(preset.defaultBaseUrl);
+        setDatasourceEndpoints(preset.items.map((it) => ({ ...it, selected: true })));
+      }
+      return;
+    }
+
+    if (key.startsWith('mpe:')) {
+      const connId = key.replace('mpe:', '');
+      setLoadingMpeDatasources(true);
+      try {
+        const items = await browseMpeDatasource(connId, 'api');
+        if (Array.isArray(items)) {
+          setDatasourceEndpoints(
+            items.map((it) => ({
+              id: it.id,
+              name: it.name,
+              method: (it.method || 'GET').toUpperCase(),
+              path: it.path || `/${it.id}`,
+              summary: it.summary || '',
+              selected: true,
+              raw: (it.raw || {}) as Record<string, unknown>,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error('Failed to browse MPE datasource:', err);
+      } finally {
+        setLoadingMpeDatasources(false);
+      }
     }
   };
 
@@ -600,7 +1000,9 @@ function PanelApp() {
       const res = await uiCall<{ success: boolean; tools: AgentToolDefinition[]; count: number }>(
         'convert_datasource_to_tools',
         {
-          datasource_type: DATASOURCE_PRESETS[selectedDatasource]?.type || 'openapi',
+          datasource_type: selectedDatasourceKey.startsWith('mpe:')
+            ? mpeConnections.find((c) => c.id === selectedDatasourceKey.replace('mpe:', ''))?.datasource_id || 'http'
+            : 'openapi',
           base_url: datasourceBaseUrl,
           items: selectedItems.map((it) => ({
             id: it.id,
@@ -967,62 +1369,7 @@ function PanelApp() {
   };
 
   const handleAddCanvasNodeTool = (node: PluginIframeNodeSnapshot) => {
-    const rawLabel = (node.label || node.name || '').trim();
-    const nodeName = rawLabel || `${node.type.replace(/[:\-]/g, '_')}_${node.uuid.slice(-4)}`;
-    const sanitizedId = `${node.type.replace(/[:\-]/g, '_')}_${node.uuid.slice(-4)}`;
-    const toolName = rawLabel ? rawLabel.replace(/\s+/g, '_') : sanitizedId;
-
-    let defaultSchema: Record<string, unknown> = {
-      type: 'object',
-      properties: {},
-    };
-
-    if (node.type.startsWith('db:') || node.type === 'sql') {
-      defaultSchema = {
-        type: 'object',
-        properties: {
-          sql: { type: 'string', description: 'SQL query statement' },
-        },
-        required: ['sql'],
-      };
-    } else if (node.type.startsWith('redis:')) {
-      defaultSchema = {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Redis command name (e.g. GET)' },
-          args: { type: 'string', description: 'JSON array of arguments, e.g. ["key"]' },
-        },
-        required: ['command'],
-      };
-    } else if (node.type.startsWith('http:request')) {
-      defaultSchema = {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative path or endpoint' },
-          query_params: { type: 'object', description: 'Query parameters' },
-        },
-      };
-    } else if (node.type === 'llm:chat') {
-      defaultSchema = {
-        type: 'object',
-        properties: {
-          message: { type: 'string', description: 'User message to send to the LLM chat node' },
-        },
-        required: ['message'],
-      };
-    }
-
-    const newTool: AgentToolDefinition = {
-      id: sanitizedId,
-      name: toolName,
-      description: `Call canvas node '${nodeName}' (${node.type})`,
-      tool_type: 'linked_node',
-      target_node_type: node.type,
-      target_node_id: node.uuid,
-      fixed_config: node.config ? { ...node.config } : {},
-      dynamic_schema: defaultSchema,
-    };
-
+    const newTool = inferToolFromCanvasNode(node);
     setConfig((prev) => ({
       ...prev,
       tools: [...prev.tools, newTool],
@@ -1576,21 +1923,51 @@ function PanelApp() {
               </div>
             ) : activePaletteTab === 'datasource' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {mpeConnections.length === 0 && (
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--fg-muted)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      padding: '8px 10px',
+                      borderRadius: '4px',
+                      border: '1px dashed var(--border)',
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {t(
+                      '未检测到已连接的 MPE 数据源。可在 MPE 左侧栏【数据源】面板中连接 Eolink / Apifox / Swagger 插件，即可在此直接浏览企业 API 并一键挂载为 Agent 工具。',
+                      'No connected MPE datasources detected. Connect real datasources (e.g. Eolink, Apifox, Swagger) in MPE Left Sidebar [Data Sources] to browse and mount enterprise APIs directly.'
+                    )}
+                  </div>
+                )}
+
                 <div className="row" style={{ gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                  <div className="col" style={{ flex: '1 1 200px' }}>
+                  <div className="col" style={{ flex: '1 1 220px' }}>
                     <label style={{ fontSize: '11px', fontWeight: 600 }}>
-                      {t('选择数据源规范 / 服务 (Datasource):', 'Select Datasource Spec:')}
+                      {t('选择数据源服务 (Datasource):', 'Select Datasource:')}
                     </label>
                     <select
-                      value={selectedDatasource}
-                      onChange={(e) => handleSelectDatasourcePreset(e.target.value)}
+                      value={selectedDatasourceKey}
+                      onChange={(e) => void handleSelectDatasource(e.target.value)}
                       style={{ fontSize: '12px' }}
                     >
-                      {Object.entries(DATASOURCE_PRESETS).map(([key, item]) => (
-                        <option key={key} value={key}>
-                          {t(item.nameZh, item.nameEn)}
-                        </option>
-                      ))}
+                      {mpeConnections.length > 0 && (
+                        <optgroup label={t('MPE 已连接数据源', 'MPE Connected Datasources')}>
+                          {mpeConnections.map((c) => (
+                            <option key={c.id} value={`mpe:${c.id}`}>
+                              {c.name || c.display_name} ({c.datasource_id})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label={t('内置示例规范 (Demo Presets)', 'Built-in Demo Presets')}>
+                        {Object.entries(DATASOURCE_DEMO_PRESETS).map(([key, item]) => (
+                          <option key={key} value={`preset:${key}`}>
+                            {t(item.nameZh, item.nameEn)}
+                          </option>
+                        ))}
+                      </optgroup>
                     </select>
                   </div>
 
@@ -1643,62 +2020,72 @@ function PanelApp() {
                     background: 'var(--bg-subtle)',
                   }}
                 >
-                  {datasourceEndpoints.map((ep, epIdx) => (
-                    <div
-                      key={ep.id || epIdx}
-                      onClick={() => handleToggleEndpoint(epIdx)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        padding: '6px 10px',
-                        borderRadius: '4px',
-                        background: ep.selected ? 'var(--accent-soft)' : 'var(--bg)',
-                        border: ep.selected ? '1px solid var(--accent)' : '1px solid var(--border)',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={ep.selected}
-                        onChange={() => {}}
-                        style={{ cursor: 'pointer' }}
-                      />
-                      <span
-                        className="badge"
+                  {loadingMpeDatasources ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: 'var(--fg-muted)', fontSize: '12px' }}>
+                      {t('正在拉取数据源接口列表...', 'Loading datasource endpoints...')}
+                    </div>
+                  ) : datasourceEndpoints.length === 0 ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: 'var(--fg-muted)', fontSize: '12px' }}>
+                      {t('当前数据源暂无可调用的 API 接口', 'No API endpoints available')}
+                    </div>
+                  ) : (
+                    datasourceEndpoints.map((ep, epIdx) => (
+                      <div
+                        key={ep.id || epIdx}
+                        onClick={() => handleToggleEndpoint(epIdx)}
                         style={{
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          flexShrink: 0,
-                          background:
-                            ep.method === 'GET'
-                              ? 'var(--ok-soft)'
-                              : ep.method === 'POST'
-                              ? 'var(--info-soft)'
-                              : ep.method === 'DELETE'
-                              ? 'var(--danger-soft)'
-                              : 'var(--accent-soft)',
-                          color:
-                            ep.method === 'GET'
-                              ? 'var(--ok)'
-                              : ep.method === 'POST'
-                              ? 'var(--info)'
-                              : ep.method === 'DELETE'
-                              ? 'var(--danger)'
-                              : 'var(--accent)',
-                          border: '1px solid currentColor',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '6px 10px',
+                          borderRadius: '4px',
+                          background: ep.selected ? 'var(--accent-soft)' : 'var(--bg)',
+                          border: ep.selected ? '1px solid var(--accent)' : '1px solid var(--border)',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          transition: 'all 0.15s ease',
                         }}
                       >
-                        {ep.method}
-                      </span>
-                      <strong style={{ flexShrink: 0, fontFamily: 'monospace' }}>{ep.path}</strong>
-                      <span style={{ color: 'var(--fg-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {ep.summary || ep.name}
-                      </span>
-                    </div>
-                  ))}
+                        <input
+                          type="checkbox"
+                          checked={ep.selected}
+                          onChange={() => {}}
+                          style={{ cursor: 'pointer' }}
+                        />
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            flexShrink: 0,
+                            background:
+                              ep.method === 'GET'
+                                ? 'var(--ok-soft)'
+                                : ep.method === 'POST'
+                                ? 'var(--info-soft)'
+                                : ep.method === 'DELETE'
+                                ? 'var(--danger-soft)'
+                                : 'var(--accent-soft)',
+                            color:
+                              ep.method === 'GET'
+                                ? 'var(--ok)'
+                                : ep.method === 'POST'
+                                ? 'var(--info)'
+                                : ep.method === 'DELETE'
+                                ? 'var(--danger)'
+                                : 'var(--accent)',
+                            border: '1px solid currentColor',
+                          }}
+                        >
+                          {ep.method}
+                        </span>
+                        <strong style={{ flexShrink: 0, fontFamily: 'monospace' }}>{ep.path}</strong>
+                        <span style={{ color: 'var(--fg-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {ep.summary || ep.name}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
@@ -1982,6 +2369,215 @@ function PanelApp() {
             </div>
           ))
         )}
+      </div>
+
+      {/* 4. Structured Output Configuration */}
+      <div className="card">
+        <div className="card-title">
+          <IconBraces size={16} />
+          {t('结构化输出与变量导出 (Structured Output & Export)', 'Structured Output & Variables Export')}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
+          {/* Enable Structured Output Checkbox */}
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface)',
+            }}
+          >
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '13px',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={!!config.structured_output_enabled}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setConfig((prev) => ({
+                    ...prev,
+                    structured_output_enabled: enabled,
+                    structured_output_schema: enabled
+                      ? prev.structured_output_schema || STRUCTURED_OUTPUT_PRESETS['sre_diagnosis'].schema
+                      : prev.structured_output_schema,
+                  }));
+                }}
+              />
+              <IconSparkles
+                size={16}
+                style={{
+                  color: config.structured_output_enabled ? 'var(--accent)' : 'var(--fg-muted)',
+                }}
+              />
+              <span>{t('启用严格结构化输出 (Enable Structured Output)', 'Enable Strict Structured Output')}</span>
+            </label>
+            <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginLeft: '24px', marginTop: '2px' }}>
+              {t(
+                '要求大模型在得出最终结论时严格返回符合指定 JSON Schema 的对象。若不符合，Agent 会拦截并在限制轮次内自我修复重试。',
+                'Forces the agent to output a strictly conforming JSON object validated against JSON Schema upon convergence. Automatically self-corrects if invalid.'
+              )}
+            </div>
+          </div>
+
+          {config.structured_output_enabled && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '2px' }}>
+              {/* Auto export variables checkbox */}
+              <div
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                  backgroundColor: 'var(--surface)',
+                }}
+              >
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={config.export_variables !== false}
+                    onChange={(e) =>
+                      setConfig((prev) => ({ ...prev, export_variables: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    {t(
+                      '自动将平坦顶级字段解包并注入流程变量 (Auto-export flat fields to flow variables)',
+                      'Auto-export flat top-level fields to flow execution variables'
+                    )}
+                  </span>
+                </label>
+                <div style={{ fontSize: '11px', color: 'var(--fg-muted)', marginLeft: '24px' }}>
+                  {t(
+                    '收敛成功后，JSON 对象中的平坦字段将自动注入宿主变量，下游节点可直接使用 {{key}} 或 {{steps.node.output.data.key}}。',
+                    'When converged, top-level keys are merged into flow variables, allowing downstream nodes to directly access {{key}} or {{steps.node.output.data.key}}.'
+                  )}
+                </div>
+              </div>
+
+              {/* Preset Selector */}
+              <div className="col">
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label style={{ fontWeight: 600, fontSize: '12px' }}>
+                    {t('JSON Schema 预设模版 (Preset Templates):', 'JSON Schema Preset Templates:')}
+                  </label>
+                  <select
+                    style={{ width: 'auto', minWidth: '220px', fontSize: '12px', padding: '3px 8px' }}
+                    onChange={(e) => {
+                      const presetKey = e.target.value;
+                      if (presetKey && STRUCTURED_OUTPUT_PRESETS[presetKey]) {
+                        setConfig((prev) => ({
+                          ...prev,
+                          structured_output_schema: JSON.parse(
+                            JSON.stringify(STRUCTURED_OUTPUT_PRESETS[presetKey].schema)
+                          ),
+                        }));
+                      }
+                    }}
+                    defaultValue=""
+                  >
+                    <option value="" disabled>
+                      {t('选择预设模版快速填充...', 'Select preset template...')}
+                    </option>
+                    {Object.entries(STRUCTURED_OUTPUT_PRESETS).map(([k, p]) => (
+                      <option key={k} value={k}>
+                        {t(p.labelZh, p.labelEn)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Visual Field Adder & JSON Editor */}
+              <div className="col">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={{ fontWeight: 600, fontSize: '12px' }}>
+                    {t('JSON Schema 约束定义 (JSON Schema Definition):', 'JSON Schema Definition:')}
+                  </label>
+                  <span style={{ fontSize: '11px', color: 'var(--fg-muted)' }}>
+                    {t('符合 Draft-07 / 2020-12 标准', 'Draft-07 / 2020-12 conforming')}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    padding: '10px',
+                    border: '1px solid var(--border)',
+                    borderRadius: '6px',
+                    backgroundColor: 'var(--surface)',
+                  }}
+                >
+                  {/* Quick Field Adder row */}
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      placeholder={t('字段名 (e.g. status)', 'Field name (e.g. status)')}
+                      value={newFieldName}
+                      onChange={(e) => setNewFieldName(e.target.value)}
+                      style={{ flex: 1, minWidth: '120px', fontSize: '12px' }}
+                    />
+                    <select
+                      value={newFieldType}
+                      onChange={(e) => setNewFieldType(e.target.value)}
+                      style={{ width: 'auto', minWidth: '90px', fontSize: '12px' }}
+                    >
+                      <option value="string">string</option>
+                      <option value="number">number</option>
+                      <option value="integer">integer</option>
+                      <option value="boolean">boolean</option>
+                      <option value="array">array</option>
+                      <option value="object">object</option>
+                    </select>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={newFieldRequired}
+                        onChange={(e) => setNewFieldRequired(e.target.checked)}
+                      />
+                      <span>{t('必填 (Required)', 'Required')}</span>
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleAddSchemaField}
+                      style={{ fontSize: '11px', padding: '4px 8px' }}
+                    >
+                      <IconPlus size={12} />
+                      {t('添加字段', 'Add Field')}
+                    </button>
+                  </div>
+
+                  {/* Schema JSON Editor */}
+                  <ToolSchemaEditor
+                    schema={config.structured_output_schema || {}}
+                    onChange={(newSchema) =>
+                      setConfig((prev) => ({ ...prev, structured_output_schema: newSchema }))
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 4. Safety Controls & Guardrails (Stacked in 5 clear rows) */}
