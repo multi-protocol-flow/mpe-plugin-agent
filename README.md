@@ -122,4 +122,4 @@ cargo test
 
 ## 5. License
 
-Apache-2.0 or MIT.
+MIT — see [LICENSE](./LICENSE).

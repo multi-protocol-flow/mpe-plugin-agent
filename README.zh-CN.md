@@ -116,4 +116,4 @@ cargo test
 
 ## 5. 开源协议
 
-Apache-2.0 or MIT.
+MIT，详见 [LICENSE](./LICENSE)。

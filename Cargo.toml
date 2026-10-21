@@ -3,6 +3,8 @@ name = "mpe-plugin-agent"
 version = "0.1.6"
 edition = "2021"
 description = "Agent protocol plugin: ReAct autonomous decision loop with tool calling, self-correction, dynamic parameter merging, guardrails, and thinking timeline"
+license = "MIT"
+repository = "https://github.com/multi-protocol-flow/mpe-plugin-agent"
 
 [dependencies]
 mpe-plugin-sdk = { git = "https://github.com/multi-protocol-flow/mpe-plugin-sdk.git", tag = "v0.2.2" }
